@@ -6,15 +6,17 @@
 <style>
   .detail-grid {
     display: grid; grid-template-columns: 1fr 1fr;
-    gap: 14px; margin-bottom: 20px;
+    gap: 16px; margin-bottom: 24px;
   }
   .detail-item {
     background: var(--bg-card);
     border: 1px solid var(--border);
     border-radius: var(--radius-sm);
-    padding: 14px 18px;
+    padding: 16px 20px;
+    box-shadow: var(--shadow);
+    backdrop-filter: blur(8px);
   }
-  .detail-item-label { font-size: 11px; text-transform: uppercase; letter-spacing: .06em; color: var(--text-muted); margin-bottom: 5px; }
+  .detail-item-label { font-size: 10px; text-transform: uppercase; letter-spacing: .08em; color: var(--text-muted); margin-bottom: 6px; font-weight: 700; }
   .detail-item-val { font-size: 15px; font-weight: 600; }
 
   /* Progress card */
@@ -22,82 +24,99 @@
     background: var(--bg-card);
     border: 1px solid var(--border);
     border-radius: var(--radius);
-    padding: 20px 22px;
-    margin-bottom: 20px;
+    padding: 24px 28px;
+    margin-bottom: 24px;
+    box-shadow: var(--shadow);
+    backdrop-filter: blur(8px);
   }
   .progress-header {
     display: flex; align-items: center; justify-content: space-between;
-    margin-bottom: 14px;
+    margin-bottom: 16px;
   }
-  .progress-title { font-size: 14px; font-weight: 600; }
-  .progress-pct { font-size: 22px; font-weight: 700; color: var(--accent); }
+  .progress-title { font-size: 15px; font-weight: 700; letter-spacing: -0.01em; }
+  .progress-pct { font-size: 24px; font-weight: 800; color: var(--accent-2); letter-spacing: -0.02em; }
   .progress-bar-wrap {
-    height: 10px; border-radius: 100px;
-    background: rgba(255,255,255,0.06);
-    overflow: hidden; margin-bottom: 10px;
+    height: 12px; border-radius: 100px;
+    background: rgba(8, 10, 16, 0.5);
+    overflow: hidden; margin-bottom: 12px;
+    box-shadow: 0 2px 4px rgba(0, 0, 0, 0.2) inset;
   }
   .progress-bar-fill {
     height: 100%; border-radius: 100px;
-    background: linear-gradient(90deg, var(--accent), var(--accent-2));
-    transition: width .5s ease;
+    background: var(--accent-gradient);
+    transition: width .5s cubic-bezier(0.4, 0, 0.2, 1);
     box-shadow: 0 0 10px var(--accent-glow);
     position: relative;
   }
   .progress-bar-fill.pulse::after {
     content: '';
-    position: absolute; top: 0; right: 0; bottom: 0; width: 40px;
-    background: linear-gradient(90deg, transparent, rgba(255,255,255,0.3));
-    animation: shimmer 1.2s linear infinite;
+    position: absolute; top: 0; right: 0; bottom: 0; width: 80px;
+    background: linear-gradient(90deg, transparent, rgba(255,255,255,0.2), transparent);
+    animation: shimmer 1.5s linear infinite;
   }
-  @keyframes shimmer { to { transform: translateX(20px); opacity: 0; } }
+  @keyframes shimmer { 
+    0% { transform: translateX(-150px); }
+    100% { transform: translateX(150px); }
+  }
   .progress-bar-fill.done {
-    background: linear-gradient(90deg, var(--success), #16a34a);
-    box-shadow: 0 0 10px rgba(34,197,94,0.3);
+    background: linear-gradient(90deg, var(--success), #059669);
+    box-shadow: 0 0 12px rgba(16, 185, 129, 0.3);
   }
   .progress-bar-fill.failed {
     background: linear-gradient(90deg, var(--danger), #dc2626);
+    box-shadow: 0 0 12px rgba(239, 68, 68, 0.3);
   }
   .progress-detail {
-    font-size: 12.5px; color: var(--text-secondary);
+    font-size: 13px; color: var(--text-secondary);
     font-family: 'JetBrains Mono', monospace;
     white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+    background: rgba(8, 10, 16, 0.3);
+    padding: 8px 12px;
+    border-radius: var(--radius-sm);
   }
   .phase-steps {
-    display: flex; gap: 6px; margin-top: 12px; flex-wrap: wrap;
+    display: flex; gap: 8px; margin-top: 16px; flex-wrap: wrap;
   }
   .phase-step {
-    padding: 3px 10px; border-radius: 100px; font-size: 11px; font-weight: 600;
-    background: rgba(255,255,255,0.05); color: var(--text-muted);
+    padding: 4px 12px; border-radius: 100px; font-size: 11px; font-weight: 700;
+    background: rgba(255,255,255,0.02); color: var(--text-muted);
     border: 1px solid var(--border);
+    text-transform: uppercase;
+    letter-spacing: 0.02em;
+    transition: all 0.2s ease;
   }
-  .phase-step.active { background: rgba(124,107,255,.15); color: var(--accent); border-color: var(--accent); }
-  .phase-step.done   { background: rgba(34,197,94,.1); color: var(--success); border-color: rgba(34,197,94,.3); }
+  .phase-step.active { background: rgba(99, 102, 241, .15); color: #a5b4fc; border-color: var(--accent); box-shadow: 0 2px 8px rgba(99,102,241,0.1); }
+  .phase-step.done   { background: rgba(16, 185, 129, .08); color: #34d399; border-color: rgba(16, 185, 129, .25); }
 
   .log-wrap {
-    background: #0a0c10;
+    background: #06080c;
     border: 1px solid var(--border);
     border-radius: var(--radius);
-    padding: 18px;
+    padding: 20px;
     position: relative;
     min-height: 200px;
+    box-shadow: var(--shadow);
   }
   .log-toolbar {
     display: flex; align-items: center; justify-content: space-between;
-    margin-bottom: 12px;
+    margin-bottom: 16px;
+    padding-bottom: 12px;
+    border-bottom: 1px solid var(--border);
   }
-  .log-title { font-size: 13.5px; font-weight: 600; }
+  .log-title { font-size: 14px; font-weight: 700; letter-spacing: -0.01em; }
   pre#logContent {
     font-family: 'JetBrains Mono', monospace;
     font-size: 12.5px;
-    color: #a8c5da;
+    color: #cbd5e1;
     white-space: pre-wrap;
     word-break: break-all;
     max-height: 520px;
     overflow-y: auto;
-    line-height: 1.6;
+    line-height: 1.7;
     margin: 0;
+    padding: 4px 8px;
   }
-  .running-badge { animation: pulse 1.5s ease-in-out infinite; }
+  .running-badge { animation: pulse 1.5s cubic-bezier(0.4, 0, 0.2, 1) infinite; }
   @keyframes pulse { 0%,100%{opacity:1;} 50%{opacity:.5;} }
 </style>
 {% endblock %}
