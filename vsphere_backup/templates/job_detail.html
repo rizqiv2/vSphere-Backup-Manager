@@ -1,0 +1,190 @@
+{% extends "base.html" %}
+{% set active_page = 'jobs' %}
+{% block title %}Job {{ job.id[:8] }} — vSphere Backup Manager{% endblock %}
+
+{% block head %}
+<style>
+  .detail-grid {
+    display: grid; grid-template-columns: 1fr 1fr;
+    gap: 14px; margin-bottom: 20px;
+  }
+  .detail-item {
+    background: var(--bg-card);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+    padding: 14px 18px;
+  }
+  .detail-item-label { font-size: 11px; text-transform: uppercase; letter-spacing: .06em; color: var(--text-muted); margin-bottom: 5px; }
+  .detail-item-val { font-size: 15px; font-weight: 600; }
+
+  .log-wrap {
+    background: #0a0c10;
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    padding: 18px;
+    position: relative;
+    min-height: 200px;
+  }
+  .log-toolbar {
+    display: flex; align-items: center; justify-content: space-between;
+    margin-bottom: 12px;
+  }
+  .log-title { font-size: 13.5px; font-weight: 600; }
+  pre#logContent {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 12.5px;
+    color: #a8c5da;
+    white-space: pre-wrap;
+    word-break: break-all;
+    max-height: 520px;
+    overflow-y: auto;
+    line-height: 1.6;
+    margin: 0;
+  }
+  .log-empty { text-align: center; padding: 40px; color: var(--text-muted); font-size: 13px; }
+
+  .running-badge { animation: pulse 1.5s ease-in-out infinite; }
+  @keyframes pulse { 0%,100%{opacity:1;} 50%{opacity:.5;} }
+
+  .info-row {
+    display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
+    margin-bottom: 20px;
+  }
+  .back-link {
+    color: var(--text-secondary); text-decoration: none; font-size: 13px;
+    display: flex; align-items: center; gap: 5px;
+  }
+  .back-link:hover { color: var(--text-primary); }
+</style>
+{% endblock %}
+
+{% block content %}
+<div class="topbar">
+  <div>
+    <div class="topbar-title">
+      {{ job.label or 'Backup Job' }}
+      {% if job.status == 'running' %}
+        <span class="badge badge-purple running-badge" style="margin-left:10px; vertical-align:middle;">⏳ Running</span>
+      {% elif job.status == 'finished' %}
+        <span class="badge badge-green" style="margin-left:10px; vertical-align:middle;">✓ Finished</span>
+      {% elif job.status == 'queued' %}
+        <span class="badge badge-yellow" style="margin-left:10px; vertical-align:middle;">⏱ Queued</span>
+      {% elif job.status.startswith('failed') %}
+        <span class="badge badge-red" style="margin-left:10px; vertical-align:middle;">✕ Failed</span>
+      {% endif %}
+    </div>
+    <div class="topbar-subtitle">Job ID: <span class="mono">{{ job.id }}</span></div>
+  </div>
+  <div class="topbar-actions">
+    <a href="/jobs" class="btn btn-ghost btn-sm">← All Jobs</a>
+  </div>
+</div>
+
+<div class="content">
+
+  <div class="detail-grid">
+    <div class="detail-item">
+      <div class="detail-item-label">Virtual Machine</div>
+      <div class="detail-item-val">{{ job.vm_name }}</div>
+    </div>
+    <div class="detail-item">
+      <div class="detail-item-label">Status</div>
+      <div class="detail-item-val">{{ job.status }}</div>
+    </div>
+    <div class="detail-item">
+      <div class="detail-item-label">Schedule</div>
+      <div class="detail-item-val">
+        {% if job.schedule_type and job.schedule_type != 'now' %}
+          🔁 {{ job.schedule_type|capitalize }}
+          {% if job.schedule_time %}at {{ job.schedule_time }}{% endif %}
+        {% else %}
+          One-time (Run Now)
+        {% endif %}
+      </div>
+    </div>
+    <div class="detail-item">
+      <div class="detail-item-label">Started</div>
+      <div class="detail-item-val mono" style="font-size:13px;">{{ job.started_fmt }}</div>
+    </div>
+    <div class="detail-item">
+      <div class="detail-item-label">Destination</div>
+      <div class="detail-item-val mono" style="font-size:12px; word-break:break-all;">{{ job.dest or '—' }}</div>
+    </div>
+    <div class="detail-item">
+      <div class="detail-item-label">Options</div>
+      <div class="detail-item-val" style="font-size:13px;">
+        {% if job.compress %}🗜 Compressed{% else %}Raw{% endif %}
+        {% if job.sftp_host %} · 📤 SFTP: {{ job.sftp_host }}{% endif %}
+      </div>
+    </div>
+  </div>
+
+  {% if job.schedule_id %}
+  <div class="alert alert-info" style="margin-bottom:20px;">
+    🔁 This job has an active recurring schedule. Future backups will run automatically.
+    <form method="post" action="/job/{{ job.id }}/cancel-schedule"
+          style="display:inline; margin-left:12px;"
+          onsubmit="return confirm('Cancel recurring schedule?')">
+      <button class="btn btn-danger btn-sm" type="submit">Cancel Schedule</button>
+    </form>
+  </div>
+  {% endif %}
+
+  <!-- Log viewer -->
+  <div class="log-wrap">
+    <div class="log-toolbar">
+      <div class="log-title">📄 Backup Log</div>
+      <div class="flex-center gap-2">
+        {% if job.status == 'running' %}
+        <span class="spinner"></span>
+        <span class="text-small text-muted">Auto-refreshing…</span>
+        {% endif %}
+        <button class="btn btn-ghost btn-sm" onclick="scrollLogBottom()">⬇ Bottom</button>
+      </div>
+    </div>
+    <pre id="logContent">
+      <div class="log-empty">Loading log…</div>
+    </pre>
+  </div>
+
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+  const jobId   = {{ job.id | tojson }};
+  const status  = {{ job.status | tojson }};
+
+  async function fetchLog() {
+    try {
+      const res = await fetch('/job/' + jobId + '/log');
+      const text = await res.text();
+      const pre = document.getElementById('logContent');
+      pre.textContent = text || '(log is empty)';
+    } catch(e) {
+      document.getElementById('logContent').textContent = 'Error loading log: ' + e;
+    }
+  }
+
+  function scrollLogBottom() {
+    const pre = document.getElementById('logContent');
+    pre.scrollTop = pre.scrollHeight;
+  }
+
+  // Initial load
+  fetchLog().then(scrollLogBottom);
+
+  // Poll while running
+  if (status === 'running' || status === 'queued') {
+    setInterval(() => {
+      fetchLog().then(() => {
+        scrollLogBottom();
+        // reload page if done to update status badge
+        fetch('/api/job/' + jobId + '/status')
+          .then(r => r.json())
+          .then(d => { if (d.status !== 'running' && d.status !== 'queued') location.reload(); });
+      });
+    }, 3000);
+  }
+</script>
+{% endblock %}

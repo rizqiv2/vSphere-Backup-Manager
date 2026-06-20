@@ -1,0 +1,182 @@
+{% extends "base.html" %}
+{% set active_page = 'jobs' %}
+{% block title %}Backup Jobs — vSphere Backup Manager{% endblock %}
+
+{% block head %}
+<style>
+  .jobs-header {
+    display: flex; align-items: center; justify-content: space-between;
+    margin-bottom: 20px;
+  }
+  .jobs-summary {
+    display: flex; gap: 10px; flex-wrap: wrap; margin-bottom: 20px;
+  }
+  .jobs-stat {
+    background: var(--bg-card);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+    padding: 10px 18px;
+    text-align: center;
+    min-width: 90px;
+  }
+  .jobs-stat-val { font-size: 22px; font-weight: 700; }
+  .jobs-stat-lbl { font-size: 11px; color: var(--text-muted); margin-top: 2px; }
+
+  .jobs-table-wrap {
+    background: var(--bg-card);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    overflow: hidden;
+  }
+
+  .status-icon { font-size: 16px; }
+
+  .job-actions { display: flex; gap: 6px; }
+
+  .empty-state {
+    text-align: center; padding: 60px; color: var(--text-secondary);
+  }
+  .empty-icon { font-size: 48px; margin-bottom: 12px; opacity: .5; }
+
+  .running-pulse {
+    animation: pulse 1.5s ease-in-out infinite;
+  }
+  @keyframes pulse {
+    0%, 100% { opacity: 1; }
+    50% { opacity: .5; }
+  }
+
+  .schedule-tag {
+    display: inline-flex; align-items: center; gap: 4px;
+    background: rgba(0,212,255,.08);
+    border: 1px solid rgba(0,212,255,.2);
+    color: var(--accent-2);
+    font-size: 11px; padding: 2px 8px; border-radius: 100px;
+  }
+</style>
+{% endblock %}
+
+{% block content %}
+<div class="topbar">
+  <div>
+    <div class="topbar-title">Backup Jobs</div>
+    <div class="topbar-subtitle">All scheduled and completed backup jobs</div>
+  </div>
+  <div class="topbar-actions">
+    <a href="/jobs/create" class="btn btn-primary btn-sm">➕ Create Job</a>
+  </div>
+</div>
+
+<div class="content">
+  <!-- Summary chips -->
+  <div class="jobs-summary">
+    <div class="jobs-stat">
+      <div class="jobs-stat-val">{{ jobs|length }}</div>
+      <div class="jobs-stat-lbl">Total</div>
+    </div>
+    <div class="jobs-stat">
+      <div class="jobs-stat-val" style="color:var(--accent)">{{ jobs|selectattr('status','equalto','running')|list|length }}</div>
+      <div class="jobs-stat-lbl">Running</div>
+    </div>
+    <div class="jobs-stat">
+      <div class="jobs-stat-val" style="color:var(--success)">{{ jobs|selectattr('status','equalto','finished')|list|length }}</div>
+      <div class="jobs-stat-lbl">Finished</div>
+    </div>
+    <div class="jobs-stat">
+      <div class="jobs-stat-val" style="color:var(--warning)">{{ jobs|selectattr('status','equalto','queued')|list|length }}</div>
+      <div class="jobs-stat-lbl">Queued</div>
+    </div>
+    <div class="jobs-stat">
+      <div class="jobs-stat-val" style="color:var(--danger)">{% set fcnt = namespace(n=0) %}{% for j in jobs %}{% if j.status.startswith('failed') %}{% set fcnt.n = fcnt.n + 1 %}{% endif %}{% endfor %}{{ fcnt.n }}</div>
+      <div class="jobs-stat-lbl">Failed</div>
+    </div>
+    <div class="jobs-stat">
+      <div class="jobs-stat-val" style="color:var(--accent-2)">{{ scheduled_count }}</div>
+      <div class="jobs-stat-lbl">Scheduled</div>
+    </div>
+  </div>
+
+  {% if jobs %}
+  <div class="jobs-table-wrap">
+    <table>
+      <thead>
+        <tr>
+          <th>Job</th>
+          <th>VM</th>
+          <th>Status</th>
+          <th>Schedule</th>
+          <th>Started</th>
+          <th>Actions</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for job in jobs %}
+        <tr>
+          <td>
+            <div style="font-weight:600;font-size:13px;">
+              {{ job.label or ('Job #' + job.id[:8]) }}
+            </div>
+            <div class="text-small text-muted mono">{{ job.id[:12] }}…</div>
+          </td>
+          <td>
+            <span style="font-weight:500;">{{ job.vm_name }}</span>
+          </td>
+          <td>
+            {% if job.status == 'running' %}
+              <span class="badge badge-purple running-pulse">⏳ Running</span>
+            {% elif job.status == 'finished' %}
+              <span class="badge badge-green">✓ Finished</span>
+            {% elif job.status == 'queued' %}
+              <span class="badge badge-yellow">⏱ Queued</span>
+            {% elif job.status.startswith('failed') %}
+              <span class="badge badge-red" title="{{ job.status }}">✕ Failed</span>
+            {% else %}
+              <span class="badge badge-gray">{{ job.status }}</span>
+            {% endif %}
+          </td>
+          <td>
+            {% if job.schedule_type and job.schedule_type != 'now' %}
+              <span class="schedule-tag">🔁 {{ job.schedule_type|capitalize }}</span>
+            {% else %}
+              <span class="text-muted text-small">One-time</span>
+            {% endif %}
+          </td>
+          <td class="text-small text-muted">
+            {{ job.started_fmt }}
+          </td>
+          <td>
+            <div class="job-actions">
+              <a href="/job/{{ job.id }}" class="btn btn-ghost btn-sm">View</a>
+              {% if job.schedule_id %}
+              <form method="post" action="/job/{{ job.id }}/cancel-schedule"
+                    onsubmit="return confirm('Cancel this schedule?')">
+                <button class="btn btn-danger btn-sm" type="submit">Cancel Schedule</button>
+              </form>
+              {% endif %}
+            </div>
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+
+  {% else %}
+  <div class="empty-state">
+    <div class="empty-icon">📋</div>
+    <p>No backup jobs yet.</p>
+    <a href="/jobs/create" class="btn btn-primary" style="margin-top:16px;">➕ Create your first job</a>
+  </div>
+  {% endif %}
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+  // Auto-refresh jobs page every 8 seconds if any jobs are running
+  const hasRunning = {{ 'true' if jobs|selectattr('status','equalto','running')|list|length > 0 else 'false' }};
+  if (hasRunning) {
+    setTimeout(() => location.reload(), 8000);
+  }
+</script>
+{% endblock %}

@@ -1,0 +1,109 @@
+{% extends "base.html" %}
+{% block title %}Login — vSphere Backup Manager{% endblock %}
+
+{% block head %}
+<style>
+  body { align-items: center; justify-content: center; }
+  .login-wrap {
+    width: 100%;
+    max-width: 440px;
+    padding: 24px;
+    animation: fadeUp .4s ease;
+  }
+  @keyframes fadeUp {
+    from { opacity: 0; transform: translateY(20px); }
+    to   { opacity: 1; transform: translateY(0); }
+  }
+  .login-header { text-align: center; margin-bottom: 32px; }
+  .login-icon {
+    width: 64px; height: 64px;
+    background: linear-gradient(135deg, #7c6bff, #00d4ff);
+    border-radius: 18px;
+    display: flex; align-items: center; justify-content: center;
+    font-size: 30px;
+    margin: 0 auto 16px;
+    box-shadow: 0 0 40px rgba(124,107,255,.4);
+  }
+  .login-header h1 { font-size: 22px; font-weight: 700; }
+  .login-header p { color: var(--text-secondary); margin-top: 6px; font-size: 13.5px; }
+  .login-card {
+    background: rgba(255,255,255,0.04);
+    border: 1px solid rgba(255,255,255,0.09);
+    border-radius: 16px;
+    padding: 28px 32px;
+    backdrop-filter: blur(16px);
+    box-shadow: 0 8px 40px rgba(0,0,0,0.5);
+  }
+  .divider {
+    height: 1px;
+    background: var(--border);
+    margin: 20px 0;
+  }
+  .login-footer { text-align: center; margin-top: 18px; font-size: 12px; color: var(--text-muted); }
+  .btn-login {
+    width: 100%;
+    justify-content: center;
+    padding: 12px;
+    font-size: 15px;
+  }
+</style>
+{% endblock %}
+
+{% block content %}
+<div class="login-wrap">
+  <div class="login-header">
+    <div class="login-icon">🛡</div>
+    <h1>vSphere Backup Manager</h1>
+    <p>Connect to your vCenter or ESXi host to get started</p>
+  </div>
+
+  <div class="login-card">
+    <form method="post" action="/login" id="loginForm">
+      <div class="form-group">
+        <label class="form-label" for="host">vCenter / ESXi Host</label>
+        <input id="host" class="form-control" type="text" name="host"
+               placeholder="e.g. 192.168.1.10 or vcenter.corp.local"
+               value="{{ request.form.get('host', '') }}" required autocomplete="off" />
+      </div>
+
+      <div class="form-group">
+        <label class="form-label" for="user">Username</label>
+        <input id="user" class="form-control" type="text" name="user"
+               placeholder="e.g. administrator@vsphere.local"
+               value="{{ request.form.get('user', '') }}" required autocomplete="username" />
+      </div>
+
+      <div class="form-group">
+        <label class="form-label" for="password">Password</label>
+        <input id="password" class="form-control" type="password" name="password"
+               placeholder="••••••••••" required autocomplete="current-password" />
+      </div>
+
+      <div class="divider"></div>
+
+      <div class="form-check">
+        <input type="checkbox" id="no_verify_ssl" name="no_verify_ssl"
+               {% if request.form.get('no_verify_ssl') %}checked{% endif %} />
+        <label for="no_verify_ssl">Skip SSL certificate verification</label>
+      </div>
+
+      <button id="loginBtn" type="submit" class="btn btn-primary btn-login" style="margin-top:20px;">
+        <span id="loginBtnText">🔐 Connect to vCenter</span>
+        <span id="loginBtnSpinner" class="spinner" style="display:none;"></span>
+      </button>
+    </form>
+  </div>
+
+  <div class="login-footer">Credentials are stored only in your browser session</div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+  document.getElementById('loginForm').addEventListener('submit', function() {
+    document.getElementById('loginBtnText').textContent = 'Connecting…';
+    document.getElementById('loginBtnSpinner').style.display = 'inline-block';
+    document.getElementById('loginBtn').disabled = true;
+  });
+</script>
+{% endblock %}

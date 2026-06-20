@@ -1,0 +1,324 @@
+{% extends "base.html" %}
+{% set active_page = 'create_job' %}
+{% block title %}Create Backup Job — vSphere Backup Manager{% endblock %}
+
+{% block head %}
+<style>
+  .wizard-wrap { max-width: 680px; }
+
+  .wizard-steps {
+    display: flex; align-items: center; gap: 0;
+    margin-bottom: 28px; counter-reset: step;
+  }
+  .step {
+    display: flex; align-items: center; gap: 10px;
+    flex: 1; position: relative;
+  }
+  .step:not(:last-child)::after {
+    content: '';
+    flex: 1; height: 1px;
+    background: var(--border);
+    margin: 0 10px;
+  }
+  .step.done:not(:last-child)::after { background: var(--accent); }
+  .step-num {
+    width: 28px; height: 28px; border-radius: 50%;
+    border: 2px solid var(--border);
+    display: flex; align-items: center; justify-content: center;
+    font-size: 12px; font-weight: 700; flex-shrink: 0;
+    color: var(--text-muted);
+  }
+  .step.active .step-num { border-color: var(--accent); color: var(--accent); background: rgba(124,107,255,.12); }
+  .step.done .step-num { border-color: var(--accent); background: var(--accent); color: #fff; }
+  .step-label { font-size: 12.5px; font-weight: 500; color: var(--text-muted); }
+  .step.active .step-label { color: var(--text-primary); }
+
+  .section-card {
+    background: var(--bg-card);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    margin-bottom: 16px;
+    overflow: hidden;
+  }
+  .section-card-header {
+    padding: 14px 20px;
+    border-bottom: 1px solid var(--border);
+    background: rgba(255,255,255,0.02);
+    display: flex; align-items: center; gap: 10px;
+    font-size: 14px; font-weight: 600;
+  }
+  .section-card-body { padding: 20px; }
+
+  .schedule-options {
+    display: grid; grid-template-columns: repeat(2, 1fr);
+    gap: 10px; margin-bottom: 16px;
+  }
+  .schedule-opt {
+    border: 2px solid var(--border);
+    border-radius: var(--radius-sm);
+    padding: 14px 16px;
+    cursor: pointer;
+    transition: all .18s;
+    display: flex; align-items: flex-start; gap: 10px;
+  }
+  .schedule-opt:hover { border-color: var(--border-bright); background: var(--bg-card-hover); }
+  .schedule-opt.selected { border-color: var(--accent); background: rgba(124,107,255,.08); }
+  .schedule-opt input[type=radio] { display: none; }
+  .schedule-opt-icon { font-size: 20px; }
+  .schedule-opt-title { font-size: 13.5px; font-weight: 600; }
+  .schedule-opt-desc { font-size: 12px; color: var(--text-muted); margin-top: 2px; }
+
+  .schedule-detail { display: none; }
+  .schedule-detail.visible { display: block; }
+
+  .form-row { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
+
+  .sftp-toggle-btn {
+    background: none; border: none; cursor: pointer;
+    color: var(--accent); font-size: 13px; font-weight: 500;
+    display: flex; align-items: center; gap: 6px;
+    padding: 0; margin-top: 4px;
+    text-decoration: underline; text-underline-offset: 3px;
+  }
+  .sftp-section { display: none; margin-top: 16px; }
+  .sftp-section.visible { display: block; }
+
+  .action-bar {
+    display: flex; gap: 12px; align-items: center;
+    padding: 20px 0 0;
+  }
+</style>
+{% endblock %}
+
+{% block content %}
+<div class="topbar">
+  <div>
+    <div class="topbar-title">Create Backup Job</div>
+    <div class="topbar-subtitle">Configure a new backup job for a virtual machine</div>
+  </div>
+</div>
+
+<div class="content">
+  <div class="wizard-wrap">
+    <!-- Progress steps -->
+    <div class="wizard-steps">
+      <div class="step done">
+        <div class="step-num">✓</div>
+        <div class="step-label">Connected</div>
+      </div>
+      <div class="step active">
+        <div class="step-num">2</div>
+        <div class="step-label">Configure Job</div>
+      </div>
+      <div class="step">
+        <div class="step-num">3</div>
+        <div class="step-label">Review & Run</div>
+      </div>
+    </div>
+
+    <form method="post" action="/jobs/create" id="jobForm">
+
+      <!-- VM Selection -->
+      <div class="section-card">
+        <div class="section-card-header">🖥 Virtual Machine</div>
+        <div class="section-card-body">
+          <div class="form-group" style="margin:0;">
+            <label class="form-label" for="vm_name">Select VM to back up</label>
+            <select id="vm_name" name="vm_name" class="form-control" required>
+              <option value="">— Choose a VM —</option>
+              {% for vm in vms %}
+              <option value="{{ vm.name }}"
+                {% if vm.name == selected_vm %}selected{% endif %}>
+                {{ vm.name }}
+                {% if vm.power_state == 'poweredOn' %}🟢{% elif vm.power_state == 'poweredOff' %}🔴{% else %}🟡{% endif %}
+                ({{ vm.guest_os[:30] if vm.guest_os else 'Unknown' }})
+              </option>
+              {% endfor %}
+            </select>
+          </div>
+        </div>
+      </div>
+
+      <!-- Destination -->
+      <div class="section-card">
+        <div class="section-card-header">📁 Destination</div>
+        <div class="section-card-body">
+          <div class="form-group">
+            <label class="form-label" for="dest">Local backup path</label>
+            <input id="dest" class="form-control" type="text" name="dest"
+                   value="./backups" placeholder="e.g. D:\Backups or /mnt/nas/backups" required />
+          </div>
+          <div class="form-check">
+            <input type="checkbox" id="compress" name="compress" />
+            <label for="compress">Compress with zstd (smaller files, slower)</label>
+          </div>
+          <div class="form-check">
+            <input type="checkbox" id="no_verify_ssl" name="no_verify_ssl"
+                   {% if session.get('no_verify_ssl') %}checked{% endif %} />
+            <label for="no_verify_ssl">Skip SSL certificate verification</label>
+          </div>
+
+          <!-- SFTP Toggle -->
+          <button type="button" class="sftp-toggle-btn" onclick="toggleSFTP()">
+            <span id="sftpToggleIcon">▶</span>
+            Upload to SFTP server (optional)
+          </button>
+          <div class="sftp-section" id="sftpSection">
+            <div class="form-row" style="margin-top:14px;">
+              <div class="form-group" style="margin:0;">
+                <label class="form-label" for="sftp_host">SFTP Host</label>
+                <input id="sftp_host" class="form-control" type="text" name="sftp_host" placeholder="sftp.example.com" />
+              </div>
+              <div class="form-group" style="margin:0;">
+                <label class="form-label" for="sftp_user">SFTP Username</label>
+                <input id="sftp_user" class="form-control" type="text" name="sftp_user" placeholder="backupuser" />
+              </div>
+            </div>
+            <div class="form-group" style="margin-top:12px;">
+              <label class="form-label" for="sftp_password">SFTP Password</label>
+              <input id="sftp_password" class="form-control" type="password" name="sftp_password" placeholder="••••••••" />
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Schedule -->
+      <div class="section-card">
+        <div class="section-card-header">🕐 Schedule</div>
+        <div class="section-card-body">
+          <div class="schedule-options">
+
+            <label class="schedule-opt {% if not show_schedule %}selected{% endif %}" id="opt-now" onclick="selectSchedule('now')">
+              <input type="radio" name="schedule_type" value="now" {% if not show_schedule %}checked{% endif %} />
+              <div>
+                <div class="schedule-opt-icon">⚡</div>
+                <div class="schedule-opt-title">Run Now</div>
+                <div class="schedule-opt-desc">Start the backup immediately</div>
+              </div>
+            </label>
+
+            <label class="schedule-opt {% if show_schedule %}selected{% endif %}" id="opt-daily" onclick="selectSchedule('daily')">
+              <input type="radio" name="schedule_type" value="daily" {% if show_schedule %}checked{% endif %}/>
+              <div>
+                <div class="schedule-opt-icon">📅</div>
+                <div class="schedule-opt-title">Daily</div>
+                <div class="schedule-opt-desc">Repeat every day at a set time</div>
+              </div>
+            </label>
+
+            <label class="schedule-opt" id="opt-weekly" onclick="selectSchedule('weekly')">
+              <input type="radio" name="schedule_type" value="weekly" />
+              <div>
+                <div class="schedule-opt-icon">🗓</div>
+                <div class="schedule-opt-title">Weekly</div>
+                <div class="schedule-opt-desc">Repeat every week on a specific day</div>
+              </div>
+            </label>
+
+            <label class="schedule-opt" id="opt-interval" onclick="selectSchedule('interval')">
+              <input type="radio" name="schedule_type" value="interval" />
+              <div>
+                <div class="schedule-opt-icon">🔁</div>
+                <div class="schedule-opt-title">Interval</div>
+                <div class="schedule-opt-desc">Repeat every N hours</div>
+              </div>
+            </label>
+
+          </div>
+
+          <!-- Daily detail -->
+          <div class="schedule-detail {% if show_schedule %}visible{% endif %}" id="detail-daily">
+            <div class="form-row">
+              <div class="form-group" style="margin:0;">
+                <label class="form-label" for="daily_time">Time (24h)</label>
+                <input id="daily_time" class="form-control" type="time" name="daily_time" value="02:00" />
+              </div>
+            </div>
+          </div>
+
+          <!-- Weekly detail -->
+          <div class="schedule-detail" id="detail-weekly">
+            <div class="form-row">
+              <div class="form-group" style="margin:0;">
+                <label class="form-label" for="weekly_day">Day of Week</label>
+                <select id="weekly_day" class="form-control" name="weekly_day">
+                  <option value="0">Monday</option>
+                  <option value="1">Tuesday</option>
+                  <option value="2">Wednesday</option>
+                  <option value="3">Thursday</option>
+                  <option value="4">Friday</option>
+                  <option value="5">Saturday</option>
+                  <option value="6">Sunday</option>
+                </select>
+              </div>
+              <div class="form-group" style="margin:0;">
+                <label class="form-label" for="weekly_time">Time (24h)</label>
+                <input id="weekly_time" class="form-control" type="time" name="weekly_time" value="02:00" />
+              </div>
+            </div>
+          </div>
+
+          <!-- Interval detail -->
+          <div class="schedule-detail" id="detail-interval">
+            <div class="form-row">
+              <div class="form-group" style="margin:0;">
+                <label class="form-label" for="interval_hours">Every (hours)</label>
+                <input id="interval_hours" class="form-control" type="number"
+                       name="interval_hours" value="24" min="1" max="8760" />
+              </div>
+            </div>
+          </div>
+
+          <!-- Job label -->
+          <div class="form-group" style="margin-top: 18px; margin-bottom:0">
+            <label class="form-label" for="job_label">Job label (optional)</label>
+            <input id="job_label" class="form-control" type="text" name="job_label"
+                   placeholder="e.g. Nightly web-server backup" />
+          </div>
+        </div>
+      </div>
+
+      <div class="action-bar">
+        <button type="submit" id="submitBtn" class="btn btn-primary">
+          <span id="submitText">🚀 Create Job</span>
+          <span id="submitSpinner" class="spinner" style="display:none;"></span>
+        </button>
+        <a href="/vms" class="btn btn-ghost">Cancel</a>
+      </div>
+    </form>
+  </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+  function selectSchedule(type) {
+    ['now','daily','weekly','interval'].forEach(t => {
+      document.getElementById('opt-' + t).classList.remove('selected');
+      const d = document.getElementById('detail-' + t);
+      if (d) d.classList.remove('visible');
+    });
+    document.getElementById('opt-' + type).classList.add('selected');
+    document.getElementById('opt-' + type).querySelector('input').checked = true;
+    const detail = document.getElementById('detail-' + type);
+    if (detail) detail.classList.add('visible');
+  }
+
+  function toggleSFTP() {
+    const sec = document.getElementById('sftpSection');
+    const ico = document.getElementById('sftpToggleIcon');
+    sec.classList.toggle('visible');
+    ico.textContent = sec.classList.contains('visible') ? '▼' : '▶';
+  }
+
+  document.getElementById('jobForm').addEventListener('submit', function() {
+    document.getElementById('submitText').textContent = 'Starting…';
+    document.getElementById('submitSpinner').style.display = 'inline-block';
+    document.getElementById('submitBtn').disabled = true;
+  });
+
+  {% if show_schedule %}
+  selectSchedule('daily');
+  {% endif %}
+</script>
+{% endblock %}

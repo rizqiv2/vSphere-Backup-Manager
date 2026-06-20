@@ -1,0 +1,332 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>{% block title %}vSphere Backup Manager{% endblock %}</title>
+  <meta name="description" content="Enterprise vSphere VM backup management — schedule, monitor and manage VM backups." />
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet" />
+  <style>
+    :root {
+      --bg-base:       #0b0d14;
+      --bg-surface:    #111520;
+      --bg-card:       rgba(255,255,255,0.04);
+      --bg-card-hover: rgba(255,255,255,0.07);
+      --border:        rgba(255,255,255,0.08);
+      --border-bright: rgba(255,255,255,0.15);
+      --accent:        #7c6bff;
+      --accent-2:      #00d4ff;
+      --accent-glow:   rgba(124,107,255,0.3);
+      --success:       #22c55e;
+      --warning:       #f59e0b;
+      --danger:        #ef4444;
+      --text-primary:  #f0f2ff;
+      --text-secondary:#94a3b8;
+      --text-muted:    #4a5568;
+      --sidebar-w:     240px;
+      --radius:        12px;
+      --radius-sm:     8px;
+      --shadow:        0 4px 24px rgba(0,0,0,0.4);
+    }
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    html, body { height: 100%; }
+    body {
+      font-family: 'Inter', system-ui, sans-serif;
+      background: var(--bg-base);
+      color: var(--text-primary);
+      display: flex;
+      min-height: 100vh;
+      font-size: 14px;
+      line-height: 1.5;
+    }
+
+    /* ── Sidebar ── */
+    .sidebar {
+      width: var(--sidebar-w);
+      min-height: 100vh;
+      background: var(--bg-surface);
+      border-right: 1px solid var(--border);
+      display: flex;
+      flex-direction: column;
+      padding: 0;
+      position: fixed;
+      left: 0; top: 0; bottom: 0;
+      z-index: 100;
+    }
+    .sidebar-logo {
+      padding: 24px 20px 20px;
+      border-bottom: 1px solid var(--border);
+    }
+    .sidebar-logo .logo-mark {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+    }
+    .logo-icon {
+      width: 36px; height: 36px;
+      background: linear-gradient(135deg, var(--accent), var(--accent-2));
+      border-radius: var(--radius-sm);
+      display: flex; align-items: center; justify-content: center;
+      font-size: 18px;
+      box-shadow: 0 0 20px var(--accent-glow);
+    }
+    .logo-text { font-size: 15px; font-weight: 700; color: var(--text-primary); }
+    .logo-sub  { font-size: 11px; color: var(--text-secondary); margin-top: 1px; }
+
+    .sidebar-nav { flex: 1; padding: 16px 12px; }
+    .nav-section-label {
+      font-size: 10px; font-weight: 600; letter-spacing: 0.1em;
+      color: var(--text-muted); text-transform: uppercase;
+      padding: 0 8px; margin: 12px 0 6px;
+    }
+    .nav-link {
+      display: flex; align-items: center; gap: 10px;
+      padding: 9px 12px; border-radius: var(--radius-sm);
+      color: var(--text-secondary); text-decoration: none;
+      font-size: 13.5px; font-weight: 500;
+      transition: all .18s ease;
+      margin-bottom: 2px;
+    }
+    .nav-link:hover { background: var(--bg-card-hover); color: var(--text-primary); }
+    .nav-link.active { background: rgba(124,107,255,0.15); color: var(--accent); }
+    .nav-link .icon { font-size: 16px; width: 20px; text-align: center; }
+
+    .sidebar-footer {
+      padding: 16px 20px;
+      border-top: 1px solid var(--border);
+    }
+    .server-badge {
+      background: var(--bg-card);
+      border: 1px solid var(--border);
+      border-radius: var(--radius-sm);
+      padding: 8px 12px;
+      font-size: 12px;
+    }
+    .server-badge .server-host { font-weight: 600; color: var(--accent-2); word-break: break-all; }
+    .server-badge .server-user { color: var(--text-muted); }
+
+    /* ── Main content ── */
+    .main {
+      margin-left: var(--sidebar-w);
+      flex: 1;
+      display: flex;
+      flex-direction: column;
+      min-height: 100vh;
+    }
+    .topbar {
+      padding: 20px 32px;
+      border-bottom: 1px solid var(--border);
+      background: rgba(11,13,20,0.8);
+      backdrop-filter: blur(12px);
+      display: flex; align-items: center; justify-content: space-between;
+      position: sticky; top: 0; z-index: 50;
+    }
+    .topbar-title { font-size: 20px; font-weight: 700; }
+    .topbar-subtitle { font-size: 13px; color: var(--text-secondary); margin-top: 2px; }
+    .topbar-actions { display: flex; align-items: center; gap: 10px; }
+
+    .content { padding: 28px 32px; flex: 1; }
+
+    /* ── Buttons ── */
+    .btn {
+      display: inline-flex; align-items: center; gap: 7px;
+      padding: 9px 18px; border-radius: var(--radius-sm);
+      font-size: 13.5px; font-weight: 600;
+      cursor: pointer; border: none; text-decoration: none;
+      transition: all .18s ease; line-height: 1;
+      white-space: nowrap;
+    }
+    .btn-primary {
+      background: linear-gradient(135deg, var(--accent), #5b52e0);
+      color: #fff;
+      box-shadow: 0 2px 12px var(--accent-glow);
+    }
+    .btn-primary:hover { transform: translateY(-1px); box-shadow: 0 4px 20px var(--accent-glow); }
+    .btn-secondary {
+      background: var(--bg-card);
+      border: 1px solid var(--border-bright);
+      color: var(--text-primary);
+    }
+    .btn-secondary:hover { background: var(--bg-card-hover); }
+    .btn-danger {
+      background: rgba(239,68,68,0.15);
+      border: 1px solid rgba(239,68,68,0.3);
+      color: var(--danger);
+    }
+    .btn-danger:hover { background: rgba(239,68,68,0.25); }
+    .btn-sm { padding: 6px 12px; font-size: 12.5px; }
+    .btn-ghost { background: transparent; border: 1px solid var(--border); color: var(--text-secondary); }
+    .btn-ghost:hover { border-color: var(--border-bright); color: var(--text-primary); }
+
+    /* ── Cards ── */
+    .card {
+      background: var(--bg-card);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      transition: border-color .2s;
+    }
+    .card:hover { border-color: var(--border-bright); }
+    .card-header {
+      padding: 18px 22px;
+      border-bottom: 1px solid var(--border);
+      display: flex; align-items: center; justify-content: space-between;
+    }
+    .card-title { font-size: 15px; font-weight: 600; }
+    .card-body { padding: 22px; }
+
+    /* ── Badges / Status chips ── */
+    .badge {
+      display: inline-flex; align-items: center; gap: 5px;
+      padding: 3px 10px; border-radius: 100px;
+      font-size: 11.5px; font-weight: 600; letter-spacing: 0.02em;
+    }
+    .badge::before { content: ''; width: 6px; height: 6px; border-radius: 50%; display: inline-block; }
+    .badge-green  { background: rgba(34,197,94,.12); color: var(--success); }
+    .badge-green::before  { background: var(--success); box-shadow: 0 0 6px var(--success); }
+    .badge-red    { background: rgba(239,68,68,.12); color: var(--danger); }
+    .badge-red::before    { background: var(--danger); }
+    .badge-yellow { background: rgba(245,158,11,.12); color: var(--warning); }
+    .badge-yellow::before { background: var(--warning); }
+    .badge-gray   { background: rgba(148,163,184,.1); color: var(--text-secondary); }
+    .badge-gray::before   { background: var(--text-secondary); }
+    .badge-purple { background: rgba(124,107,255,.15); color: var(--accent); }
+    .badge-purple::before { background: var(--accent); box-shadow: 0 0 6px var(--accent-glow); }
+
+    /* ── Form elements ── */
+    .form-group { margin-bottom: 18px; }
+    .form-label {
+      display: block; font-size: 13px; font-weight: 500;
+      color: var(--text-secondary); margin-bottom: 6px;
+    }
+    .form-control {
+      width: 100%;
+      background: rgba(255,255,255,0.05);
+      border: 1px solid var(--border);
+      border-radius: var(--radius-sm);
+      color: var(--text-primary);
+      padding: 10px 14px;
+      font-size: 14px;
+      font-family: inherit;
+      transition: border-color .18s, box-shadow .18s;
+      outline: none;
+    }
+    .form-control:focus {
+      border-color: var(--accent);
+      box-shadow: 0 0 0 3px var(--accent-glow);
+    }
+    .form-control::placeholder { color: var(--text-muted); }
+    select.form-control option { background: var(--bg-surface); color: var(--text-primary); }
+    .form-check { display: flex; align-items: center; gap: 8px; margin-bottom: 10px; }
+    .form-check input[type=checkbox] { accent-color: var(--accent); width: 16px; height: 16px; cursor: pointer; }
+    .form-check label { font-size: 13.5px; color: var(--text-secondary); cursor: pointer; }
+
+    /* ── Alert / Flash ── */
+    .alert {
+      padding: 12px 16px; border-radius: var(--radius-sm);
+      margin-bottom: 20px; font-size: 13.5px;
+      display: flex; align-items: center; gap: 10px;
+    }
+    .alert-danger  { background: rgba(239,68,68,.12); border: 1px solid rgba(239,68,68,.25); color: #fca5a5; }
+    .alert-success { background: rgba(34,197,94,.1);  border: 1px solid rgba(34,197,94,.25); color: #86efac; }
+    .alert-info    { background: rgba(0,212,255,.08); border: 1px solid rgba(0,212,255,.2);  color: #67e8f9; }
+
+    /* ── Table ── */
+    table { width: 100%; border-collapse: collapse; }
+    th {
+      text-align: left; padding: 11px 16px;
+      font-size: 11px; font-weight: 600; letter-spacing: 0.06em; text-transform: uppercase;
+      color: var(--text-muted); border-bottom: 1px solid var(--border);
+    }
+    td { padding: 13px 16px; border-bottom: 1px solid var(--border); vertical-align: middle; }
+    tr:last-child td { border-bottom: none; }
+    tr:hover td { background: rgba(255,255,255,0.02); }
+
+    /* ── Utilities ── */
+    .text-muted    { color: var(--text-secondary); }
+    .text-small    { font-size: 12px; }
+    .mono          { font-family: 'JetBrains Mono', monospace; }
+    .flex          { display: flex; }
+    .flex-center   { display: flex; align-items: center; }
+    .gap-2         { gap: 8px; }
+    .gap-3         { gap: 12px; }
+    .mt-1          { margin-top: 6px; }
+    .mt-2          { margin-top: 12px; }
+    .mt-3          { margin-top: 20px; }
+    .mb-1          { margin-bottom: 6px; }
+    .mb-2          { margin-bottom: 12px; }
+
+    /* ── Spinner ── */
+    @keyframes spin { to { transform: rotate(360deg); } }
+    .spinner {
+      width: 16px; height: 16px;
+      border: 2px solid rgba(255,255,255,.15);
+      border-top-color: var(--accent);
+      border-radius: 50%;
+      animation: spin .7s linear infinite;
+      display: inline-block;
+    }
+
+    /* ── Scrollbar ── */
+    ::-webkit-scrollbar { width: 6px; height: 6px; }
+    ::-webkit-scrollbar-track { background: transparent; }
+    ::-webkit-scrollbar-thumb { background: rgba(255,255,255,.1); border-radius: 10px; }
+    ::-webkit-scrollbar-thumb:hover { background: rgba(255,255,255,.2); }
+  </style>
+  {% block head %}{% endblock %}
+</head>
+<body>
+  {% if session.get('host') %}
+  <aside class="sidebar">
+    <div class="sidebar-logo">
+      <div class="logo-mark">
+        <div class="logo-icon">🛡</div>
+        <div>
+          <div class="logo-text">vSphere Backup</div>
+          <div class="logo-sub">Manager</div>
+        </div>
+      </div>
+    </div>
+
+    <nav class="sidebar-nav">
+      <div class="nav-section-label">Navigation</div>
+      <a href="/vms" class="nav-link {% if active_page == 'vms' %}active{% endif %}">
+        <span class="icon">🖥</span> Virtual Machines
+      </a>
+      <a href="/jobs" class="nav-link {% if active_page == 'jobs' %}active{% endif %}">
+        <span class="icon">📋</span> Backup Jobs
+      </a>
+      <a href="/jobs/create" class="nav-link {% if active_page == 'create_job' %}active{% endif %}">
+        <span class="icon">➕</span> Create Job
+      </a>
+    </nav>
+
+    <div class="sidebar-footer">
+      <div class="server-badge">
+        <div class="server-host">{{ session.get('host', '—') }}</div>
+        <div class="server-user text-small">{{ session.get('user', '') }}</div>
+      </div>
+      <a href="/logout" class="btn btn-ghost btn-sm" style="width:100%;justify-content:center;margin-top:10px;">
+        ⬅ Logout
+      </a>
+    </div>
+  </aside>
+  {% endif %}
+
+  <main class="main" {% if not session.get('host') %}style="margin-left:0"{% endif %}>
+    {% with messages = get_flashed_messages(with_categories=true) %}
+      {% if messages %}
+        <div style="padding:16px 32px 0">
+          {% for cat, msg in messages %}
+            <div class="alert alert-{{ cat }}">{{ msg }}</div>
+          {% endfor %}
+        </div>
+      {% endif %}
+    {% endwith %}
+
+    {% block content %}{% endblock %}
+  </main>
+
+  {% block scripts %}{% endblock %}
+</body>
+</html>

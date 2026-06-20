@@ -1,0 +1,412 @@
+"""
+gui_app.py — vSphere Backup Manager
+Flask web UI: login → VM browser → create jobs → schedule backups
+"""
+import os
+import sys
+import uuid
+import threading
+import time
+import json
+from datetime import datetime
+from functools import wraps
+from pathlib import Path
+
+from flask import (
+    Flask, request, redirect, url_for, session,
+    flash, jsonify, abort, render_template
+)
+
+from backup_core import run_backup, list_vms
+
+# ── APScheduler (optional graceful degradation) ──────────────────────────────
+try:
+    from apscheduler.schedulers.background import BackgroundScheduler
+    from apscheduler.triggers.cron import CronTrigger
+    from apscheduler.triggers.interval import IntervalTrigger
+    HAS_SCHEDULER = True
+except ImportError:
+    HAS_SCHEDULER = False
+    print("WARNING: APScheduler not installed — recurring schedules disabled. "
+          "Install with: pip install APScheduler", file=sys.stderr)
+
+# ── App setup ─────────────────────────────────────────────────────────────────
+app = Flask(__name__)
+app.secret_key = os.environ.get('SECRET_KEY', 'vsphere-backup-dev-key-change-me')
+
+BASE_DIR  = Path(__file__).resolve().parent
+JOBS_DIR  = BASE_DIR / 'jobs'
+JOBS_DIR.mkdir(exist_ok=True)
+
+# In-memory job store: {job_id: job_dict}
+# job_dict keys: id, label, vm_name, status, started, dest, compress,
+#                no_verify_ssl, sftp_host, sftp_user, sftp_password,
+#                log, schedule_type, schedule_time, schedule_id
+jobs: dict = {}
+
+# APScheduler instance
+scheduler = None
+if HAS_SCHEDULER:
+    scheduler = BackgroundScheduler(daemon=True)
+    scheduler.start()
+
+
+# ── Helpers ───────────────────────────────────────────────────────────────────
+def login_required(f):
+    @wraps(f)
+    def decorated(*args, **kwargs):
+        if not session.get('host'):
+            flash('Please log in first.', 'info')
+            return redirect(url_for('login'))
+        return f(*args, **kwargs)
+    return decorated
+
+
+def fmt_time(ts):
+    return datetime.fromtimestamp(ts).strftime('%Y-%m-%d %H:%M:%S') if ts else '—'
+
+
+def job_to_display(jid, info):
+    """Convert internal job dict to template-friendly dict."""
+    return {
+        'id':            jid,
+        'label':         info.get('label', ''),
+        'vm_name':       info.get('vm_name', '—'),
+        'status':        info.get('status', 'unknown'),
+        'started_fmt':   fmt_time(info.get('started')),
+        'dest':          info.get('dest', ''),
+        'compress':      info.get('compress', False),
+        'sftp_host':     info.get('sftp_host', ''),
+        'schedule_type': info.get('schedule_type', 'now'),
+        'schedule_time': info.get('schedule_time', ''),
+        'schedule_id':   info.get('schedule_id'),
+    }
+
+
+def run_job_thread(jid):
+    """Worker executed in a thread (and by APScheduler)."""
+    info = jobs.get(jid)
+    if not info:
+        return
+    info['status'] = 'running'
+    info['started'] = time.time()
+    log_path = str(JOBS_DIR / jid / 'backup.log')
+    try:
+        run_backup(
+            host=info['host'],
+            user=info['user'],
+            password=info['password'],
+            vm_name=info['vm_name'],
+            dest=info['dest'],
+            compress=info.get('compress', False),
+            no_verify_ssl=info.get('no_verify_ssl', False),
+            sftp_host=info.get('sftp_host') or None,
+            sftp_user=info.get('sftp_user') or None,
+            sftp_password=info.get('sftp_password') or None,
+            sftp_key=None,
+            log_path=log_path,
+        )
+        info['status'] = 'finished'
+    except Exception as e:
+        info['status'] = f'failed ({e})'
+
+
+def create_and_start_job(
+    vm_name, dest, compress, no_verify_ssl,
+    sftp_host, sftp_user, sftp_password,
+    schedule_type, schedule_time, weekly_day, interval_hours,
+    label=''
+):
+    """Create a job entry and either run immediately or register schedule."""
+    jid = datetime.now().strftime('%Y%m%d%H%M%S') + '-' + uuid.uuid4().hex[:6]
+    job_dir = JOBS_DIR / jid
+    job_dir.mkdir(parents=True, exist_ok=True)
+
+    info = {
+        'id':            jid,
+        'label':         label,
+        'host':          session['host'],
+        'user':          session['user'],
+        'password':      session['password'],
+        'vm_name':       vm_name,
+        'dest':          dest,
+        'compress':      compress,
+        'no_verify_ssl': no_verify_ssl,
+        'sftp_host':     sftp_host,
+        'sftp_user':     sftp_user,
+        'sftp_password': sftp_password,
+        'started':       time.time(),
+        'status':        'queued',
+        'schedule_type': schedule_type,
+        'schedule_time': schedule_time,
+        'schedule_id':   None,
+    }
+    jobs[jid] = info
+
+    if schedule_type == 'now' or not HAS_SCHEDULER:
+        t = threading.Thread(target=run_job_thread, args=(jid,), daemon=True)
+        t.start()
+    else:
+        # Build APScheduler trigger
+        trigger = None
+        if schedule_type == 'daily':
+            hour, minute = (schedule_time.split(':') + ['00'])[:2]
+            trigger = CronTrigger(hour=int(hour), minute=int(minute))
+        elif schedule_type == 'weekly':
+            hour, minute = (schedule_time.split(':') + ['00'])[:2]
+            trigger = CronTrigger(
+                day_of_week=int(weekly_day),
+                hour=int(hour), minute=int(minute)
+            )
+        elif schedule_type == 'interval':
+            trigger = IntervalTrigger(hours=max(1, int(interval_hours or 24)))
+
+        if trigger:
+            # Capture jid in closure
+            def make_runner(j):
+                def _runner():
+                    run_job_thread(j)
+                return _runner
+
+            sched_job = scheduler.add_job(
+                make_runner(jid),
+                trigger=trigger,
+                id=f'backup-{jid}',
+                name=f'Backup {vm_name} ({label or jid[:8]})',
+                misfire_grace_time=3600,
+                max_instances=1,
+            )
+            info['schedule_id'] = sched_job.id
+            info['status'] = 'scheduled'
+        else:
+            # Fallback: run now
+            t = threading.Thread(target=run_job_thread, args=(jid,), daemon=True)
+            t.start()
+
+    return jid
+
+
+# ── Routes ────────────────────────────────────────────────────────────────────
+
+@app.route('/')
+def index():
+    if session.get('host'):
+        return redirect(url_for('vms'))
+    return redirect(url_for('login'))
+
+
+# ── Login / Logout ────────────────────────────────────────────────────────────
+
+@app.route('/login', methods=['GET', 'POST'])
+def login():
+    if request.method == 'POST':
+        host         = request.form.get('host', '').strip()
+        user         = request.form.get('user', '').strip()
+        password     = request.form.get('password', '')
+        no_verify_ssl = 'no_verify_ssl' in request.form
+
+        if not (host and user and password):
+            flash('Host, username and password are required.', 'danger')
+            return render_template('login.html')
+
+        # Verify credentials by listing VMs
+        try:
+            list_vms(host, user, password, no_verify_ssl=no_verify_ssl)
+        except Exception as e:
+            flash(f'Connection failed: {e}', 'danger')
+            return render_template('login.html')
+
+        session['host']          = host
+        session['user']          = user
+        session['password']      = password
+        session['no_verify_ssl'] = no_verify_ssl
+        flash(f'Connected to {host} successfully.', 'success')
+        return redirect(url_for('vms'))
+
+    return render_template('login.html')
+
+
+@app.route('/logout')
+def logout():
+    session.clear()
+    flash('Logged out.', 'info')
+    return redirect(url_for('login'))
+
+
+# ── VM Browser ────────────────────────────────────────────────────────────────
+
+@app.route('/vms')
+@login_required
+def vms():
+    error = None
+    vm_list = []
+    try:
+        vm_list = list_vms(
+            session['host'], session['user'], session['password'],
+            no_verify_ssl=session.get('no_verify_ssl', False)
+        )
+        # Sort: powered on first, then alphabetical
+        order = {'poweredOn': 0, 'suspended': 1, 'poweredOff': 2}
+        vm_list.sort(key=lambda v: (order.get(v['power_state'], 3), v['name'].lower()))
+    except Exception as e:
+        error = str(e)
+    return render_template('vms.html', vms=vm_list, error=error)
+
+
+@app.route('/api/vms')
+@login_required
+def api_vms():
+    try:
+        vm_list = list_vms(
+            session['host'], session['user'], session['password'],
+            no_verify_ssl=session.get('no_verify_ssl', False)
+        )
+        return jsonify(vm_list)
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+# ── Create Job ────────────────────────────────────────────────────────────────
+
+@app.route('/jobs/create', methods=['GET', 'POST'])
+@login_required
+def create_job():
+    if request.method == 'POST':
+        vm_name       = request.form.get('vm_name', '').strip()
+        dest          = request.form.get('dest', './backups').strip()
+        compress      = 'compress' in request.form
+        no_verify_ssl = 'no_verify_ssl' in request.form
+        sftp_host     = request.form.get('sftp_host', '').strip() or None
+        sftp_user     = request.form.get('sftp_user', '').strip() or None
+        sftp_password = request.form.get('sftp_password', '') or None
+        schedule_type = request.form.get('schedule_type', 'now')
+        daily_time    = request.form.get('daily_time', '02:00')
+        weekly_day    = request.form.get('weekly_day', '0')
+        weekly_time   = request.form.get('weekly_time', '02:00')
+        interval_hrs  = request.form.get('interval_hours', '24')
+        label         = request.form.get('job_label', '').strip()
+
+        if not vm_name:
+            flash('Please select a virtual machine.', 'danger')
+            return redirect(url_for('create_job'))
+
+        # Determine schedule_time string for display
+        if schedule_type == 'daily':
+            sched_time = daily_time
+        elif schedule_type == 'weekly':
+            sched_time = weekly_time
+        else:
+            sched_time = ''
+
+        jid = create_and_start_job(
+            vm_name=vm_name,
+            dest=dest,
+            compress=compress,
+            no_verify_ssl=no_verify_ssl,
+            sftp_host=sftp_host,
+            sftp_user=sftp_user,
+            sftp_password=sftp_password,
+            schedule_type=schedule_type,
+            schedule_time=sched_time,
+            weekly_day=weekly_day,
+            interval_hours=interval_hrs,
+            label=label,
+        )
+        flash(f'Job created successfully!', 'success')
+        return redirect(url_for('job_detail', jobid=jid))
+
+    # GET: load VM list for the dropdown
+    selected_vm  = request.args.get('vm', '')
+    show_schedule = bool(request.args.get('schedule', ''))
+    vm_list = []
+    try:
+        vm_list = list_vms(
+            session['host'], session['user'], session['password'],
+            no_verify_ssl=session.get('no_verify_ssl', False)
+        )
+        vm_list.sort(key=lambda v: v['name'].lower())
+    except Exception as e:
+        flash(f'Could not load VM list: {e}', 'danger')
+
+    return render_template(
+        'create_job.html',
+        vms=vm_list,
+        selected_vm=selected_vm,
+        show_schedule=show_schedule,
+    )
+
+
+# ── Jobs Dashboard ────────────────────────────────────────────────────────────
+
+@app.route('/jobs')
+@login_required
+def list_jobs():
+    job_list = [
+        job_to_display(jid, info)
+        for jid, info in sorted(jobs.items(), key=lambda x: x[1].get('started', 0), reverse=True)
+    ]
+    scheduled_count = sum(1 for j in job_list if j['schedule_id'])
+    return render_template('jobs.html', jobs=job_list, scheduled_count=scheduled_count)
+
+
+# ── Job Detail ────────────────────────────────────────────────────────────────
+
+@app.route('/job/<jobid>')
+@login_required
+def job_detail(jobid):
+    info = jobs.get(jobid)
+    if not info:
+        abort(404)
+    return render_template('job_detail.html', job=job_to_display(jobid, info))
+
+
+@app.route('/job/<jobid>/log')
+@login_required
+def job_log(jobid):
+    info = jobs.get(jobid)
+    if not info:
+        abort(404)
+    log_path = JOBS_DIR / jobid / 'backup.log'
+    if not log_path.exists():
+        return '(No log output yet)', 200
+    with open(log_path, 'rb') as f:
+        lines = f.read().splitlines()[-300:]
+    return '\n'.join(line.decode('utf-8', errors='replace') for line in lines)
+
+
+@app.route('/api/job/<jobid>/status')
+@login_required
+def api_job_status(jobid):
+    info = jobs.get(jobid)
+    if not info:
+        return jsonify({'error': 'not found'}), 404
+    return jsonify({'status': info.get('status', 'unknown'), 'id': jobid})
+
+
+@app.route('/job/<jobid>/cancel-schedule', methods=['POST'])
+@login_required
+def cancel_schedule(jobid):
+    info = jobs.get(jobid)
+    if not info:
+        abort(404)
+    sched_id = info.get('schedule_id')
+    if sched_id and scheduler:
+        try:
+            scheduler.remove_job(sched_id)
+        except Exception:
+            pass
+    info['schedule_id'] = None
+    info['status'] = info.get('status', 'finished') if info.get('status') not in ('queued', 'running') else info['status']
+    flash('Recurring schedule cancelled.', 'success')
+    return redirect(url_for('job_detail', jobid=jobid))
+
+
+# ── Template filter ───────────────────────────────────────────────────────────
+@app.template_filter('startswith')
+def startswith_filter(value, prefix):
+    return str(value).startswith(prefix)
+
+
+# ── Main ──────────────────────────────────────────────────────────────────────
+if __name__ == '__main__':
+    app.run(host='0.0.0.0', port=5000, debug=False)

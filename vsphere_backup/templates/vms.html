@@ -1,0 +1,245 @@
+{% extends "base.html" %}
+{% set active_page = 'vms' %}
+{% block title %}Virtual Machines — vSphere Backup Manager{% endblock %}
+
+{% block head %}
+<style>
+  .vms-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(340px, 1fr));
+    gap: 16px;
+    margin-top: 24px;
+  }
+  .vm-card {
+    background: var(--bg-card);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    padding: 20px;
+    transition: all .2s ease;
+    cursor: default;
+    position: relative;
+    overflow: hidden;
+  }
+  .vm-card::before {
+    content: '';
+    position: absolute; top: 0; left: 0; right: 0; height: 3px;
+    background: linear-gradient(90deg, var(--accent), var(--accent-2));
+    opacity: 0;
+    transition: opacity .2s;
+  }
+  .vm-card:hover { border-color: var(--border-bright); transform: translateY(-2px); box-shadow: var(--shadow); }
+  .vm-card:hover::before { opacity: 1; }
+
+  .vm-card-header {
+    display: flex; align-items: flex-start; justify-content: space-between;
+    margin-bottom: 14px;
+  }
+  .vm-name {
+    font-size: 15px; font-weight: 600; word-break: break-word;
+    flex: 1; padding-right: 10px;
+  }
+  .vm-os { font-size: 11.5px; color: var(--text-muted); margin-top: 2px; }
+
+  .vm-stats {
+    display: grid; grid-template-columns: 1fr 1fr;
+    gap: 10px; margin: 14px 0;
+  }
+  .stat {
+    background: rgba(255,255,255,0.03);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+    padding: 8px 12px;
+  }
+  .stat-label { font-size: 10.5px; color: var(--text-muted); text-transform: uppercase; letter-spacing: .05em; }
+  .stat-value { font-size: 14px; font-weight: 600; margin-top: 2px; }
+
+  .vm-footer {
+    display: flex; gap: 8px; margin-top: 16px;
+    flex-wrap: wrap;
+  }
+  .vm-footer .btn { flex: 1; min-width: 110px; justify-content: center; }
+
+  .search-bar {
+    display: flex; align-items: center; gap: 12px;
+    background: var(--bg-card);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+    padding: 10px 16px;
+    max-width: 340px;
+  }
+  .search-bar input {
+    background: none; border: none; outline: none;
+    color: var(--text-primary); font-size: 14px; width: 100%;
+  }
+  .search-bar input::placeholder { color: var(--text-muted); }
+
+  .filter-row {
+    display: flex; align-items: center; gap: 12px;
+    margin-bottom: 4px; flex-wrap: wrap;
+  }
+  .filter-chip {
+    padding: 5px 14px; border-radius: 100px;
+    font-size: 12.5px; font-weight: 500; cursor: pointer;
+    border: 1px solid var(--border); background: none;
+    color: var(--text-secondary); transition: all .15s;
+  }
+  .filter-chip:hover { border-color: var(--border-bright); color: var(--text-primary); }
+  .filter-chip.active { background: rgba(124,107,255,.15); border-color: var(--accent); color: var(--accent); }
+
+  .stat-chips {
+    display: flex; gap: 10px; align-items: center;
+    flex-wrap: wrap; margin-bottom: 20px;
+  }
+  .stat-chip {
+    background: var(--bg-card);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+    padding: 10px 18px;
+    text-align: center;
+  }
+  .stat-chip-value { font-size: 22px; font-weight: 700; }
+  .stat-chip-label { font-size: 11px; color: var(--text-muted); margin-top: 1px; }
+
+  .empty-state {
+    text-align: center; padding: 60px 20px;
+    color: var(--text-secondary);
+  }
+  .empty-state .empty-icon { font-size: 48px; margin-bottom: 14px; opacity: 0.5; }
+</style>
+{% endblock %}
+
+{% block content %}
+<div class="topbar">
+  <div>
+    <div class="topbar-title">Virtual Machines</div>
+    <div class="topbar-subtitle">{{ vms|length }} VM{% if vms|length != 1 %}s{% endif %} found on <strong>{{ session.get('host') }}</strong></div>
+  </div>
+  <div class="topbar-actions">
+    <a href="/vms" class="btn btn-ghost btn-sm">🔄 Refresh</a>
+    <a href="/jobs/create" class="btn btn-primary btn-sm">➕ Create Job</a>
+  </div>
+</div>
+
+<div class="content">
+  {% if error %}
+  <div class="alert alert-danger">⚠ {{ error }}</div>
+  {% endif %}
+
+  <!-- Summary chips -->
+  <div class="stat-chips">
+    <div class="stat-chip">
+      <div class="stat-chip-value" style="color:var(--text-primary)">{{ vms|length }}</div>
+      <div class="stat-chip-label">Total VMs</div>
+    </div>
+    <div class="stat-chip">
+      <div class="stat-chip-value" style="color:var(--success)">{{ vms|selectattr('power_state','equalto','poweredOn')|list|length }}</div>
+      <div class="stat-chip-label">Powered On</div>
+    </div>
+    <div class="stat-chip">
+      <div class="stat-chip-value" style="color:var(--danger)">{{ vms|selectattr('power_state','equalto','poweredOff')|list|length }}</div>
+      <div class="stat-chip-label">Powered Off</div>
+    </div>
+    <div class="stat-chip">
+      <div class="stat-chip-value" style="color:var(--warning)">{{ vms|selectattr('power_state','equalto','suspended')|list|length }}</div>
+      <div class="stat-chip-label">Suspended</div>
+    </div>
+  </div>
+
+  <!-- Filter / Search row -->
+  <div class="filter-row" style="margin-bottom:16px;">
+    <div class="search-bar">
+      <span>🔍</span>
+      <input type="text" id="vmSearch" placeholder="Search VMs…" oninput="filterVMs()" />
+    </div>
+    <button class="filter-chip active" id="filter-all" onclick="setFilter('all')">All</button>
+    <button class="filter-chip" id="filter-poweredOn" onclick="setFilter('poweredOn')">🟢 On</button>
+    <button class="filter-chip" id="filter-poweredOff" onclick="setFilter('poweredOff')">🔴 Off</button>
+    <button class="filter-chip" id="filter-suspended" onclick="setFilter('suspended')">🟡 Suspended</button>
+  </div>
+
+  <!-- VM Cards grid -->
+  <div class="vms-grid" id="vmGrid">
+    {% for vm in vms %}
+    <div class="vm-card"
+         data-name="{{ vm.name|lower }}"
+         data-power="{{ vm.power_state }}">
+
+      <div class="vm-card-header">
+        <div>
+          <div class="vm-name">{{ vm.name }}</div>
+          <div class="vm-os">{{ vm.guest_os or 'Unknown OS' }}</div>
+        </div>
+        {% if vm.power_state == 'poweredOn' %}
+          <span class="badge badge-green">On</span>
+        {% elif vm.power_state == 'poweredOff' %}
+          <span class="badge badge-red">Off</span>
+        {% elif vm.power_state == 'suspended' %}
+          <span class="badge badge-yellow">Suspended</span>
+        {% else %}
+          <span class="badge badge-gray">{{ vm.power_state }}</span>
+        {% endif %}
+      </div>
+
+      <div class="vm-stats">
+        <div class="stat">
+          <div class="stat-label">CPUs</div>
+          <div class="stat-value">{{ vm.num_cpu }}</div>
+        </div>
+        <div class="stat">
+          <div class="stat-label">Memory</div>
+          <div class="stat-value">{{ (vm.memory_mb / 1024)|round(1) }} GB</div>
+        </div>
+        <div class="stat">
+          <div class="stat-label">Disk Used</div>
+          <div class="stat-value">{{ vm.committed_gb }} GB</div>
+        </div>
+        <div class="stat">
+          <div class="stat-label">IP Address</div>
+          <div class="stat-value mono" style="font-size:12px;">{{ vm.ip_address or '—' }}</div>
+        </div>
+      </div>
+
+      {% if vm.datastores %}
+      <div class="text-small text-muted mb-2">
+        📦 {{ vm.datastores|join(', ') }}
+      </div>
+      {% endif %}
+
+      <div class="vm-footer">
+        <a href="/jobs/create?vm={{ vm.name|urlencode }}"
+           class="btn btn-primary btn-sm">⚡ Backup Now</a>
+        <a href="/jobs/create?vm={{ vm.name|urlencode }}&schedule=1"
+           class="btn btn-secondary btn-sm">🕐 Schedule</a>
+      </div>
+    </div>
+    {% else %}
+    <div class="empty-state" style="grid-column:1/-1;">
+      <div class="empty-icon">🖥</div>
+      <p>No virtual machines found.</p>
+    </div>
+    {% endfor %}
+  </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+  let activeFilter = 'all';
+
+  function setFilter(filter) {
+    activeFilter = filter;
+    document.querySelectorAll('.filter-chip').forEach(c => c.classList.remove('active'));
+    document.getElementById('filter-' + filter).classList.add('active');
+    filterVMs();
+  }
+
+  function filterVMs() {
+    const q = document.getElementById('vmSearch').value.toLowerCase();
+    document.querySelectorAll('.vm-card').forEach(card => {
+      const matchFilter = activeFilter === 'all' || card.dataset.power === activeFilter;
+      const matchSearch = card.dataset.name.includes(q);
+      card.style.display = (matchFilter && matchSearch) ? '' : 'none';
+    });
+  }
+</script>
+{% endblock %}
