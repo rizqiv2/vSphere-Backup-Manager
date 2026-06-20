@@ -1,0 +1,211 @@
+{% extends "base.html" %}
+{% set active_page = 'nfs' %}
+{% block title %}NFS Manager — vSphere Backup Manager{% endblock %}
+
+{% block head %}
+<style>
+  .nfs-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(360px, 1fr));
+    gap: 16px;
+    margin-bottom: 28px;
+  }
+  .nfs-card {
+    background: var(--bg-card);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    padding: 20px;
+    transition: all .2s;
+    position: relative;
+    overflow: hidden;
+  }
+  .nfs-card::before {
+    content: '';
+    position: absolute; top: 0; left: 0; right: 0; height: 3px;
+    background: linear-gradient(90deg, var(--accent-2), #00a8cc);
+  }
+  .nfs-card:hover { border-color: var(--border-bright); transform: translateY(-2px); }
+
+  .nfs-header { display: flex; align-items: flex-start; justify-content: space-between; margin-bottom: 12px; }
+  .nfs-device { font-size: 14px; font-weight: 600; color: var(--accent-2); word-break: break-all; }
+  .nfs-mountpoint { font-size: 12.5px; color: var(--text-secondary); margin-top: 2px; font-family: 'JetBrains Mono', monospace; }
+
+  .disk-bar-wrap { margin: 14px 0 10px; }
+  .disk-bar-label { display: flex; justify-content: space-between; font-size: 11.5px; color: var(--text-muted); margin-bottom: 5px; }
+  .disk-bar {
+    height: 6px; border-radius: 100px;
+    background: rgba(255,255,255,0.08);
+    overflow: hidden;
+  }
+  .disk-bar-fill {
+    height: 100%; border-radius: 100px;
+    background: linear-gradient(90deg, var(--accent-2), var(--accent));
+    transition: width .4s ease;
+  }
+  .disk-bar-fill.warn { background: linear-gradient(90deg, var(--warning), #e07b00); }
+  .disk-bar-fill.danger { background: linear-gradient(90deg, var(--danger), #c0392b); }
+
+  .disk-stats { display: flex; gap: 12px; margin-top: 8px; }
+  .ds { font-size: 11.5px; }
+  .ds-val { font-weight: 600; }
+  .ds-lbl { color: var(--text-muted); }
+
+  .nfs-actions { margin-top: 14px; display: flex; gap: 8px; }
+
+  .mount-form-card {
+    background: var(--bg-card);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    padding: 24px;
+    max-width: 640px;
+  }
+  .form-row-3 { display: grid; grid-template-columns: 2fr 2fr 1fr; gap: 12px; }
+  .form-row-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+
+  .empty-state {
+    text-align: center; padding: 50px 20px;
+    color: var(--text-secondary);
+  }
+  .empty-icon { font-size: 48px; margin-bottom: 12px; opacity: .5; }
+
+  .linux-warn {
+    background: rgba(245,158,11,.08);
+    border: 1px solid rgba(245,158,11,.25);
+    border-radius: var(--radius-sm);
+    padding: 14px 18px;
+    color: var(--warning);
+    margin-bottom: 20px;
+    font-size: 13.5px;
+  }
+</style>
+{% endblock %}
+
+{% block content %}
+<div class="topbar">
+  <div>
+    <div class="topbar-title">NFS / CIFS Manager</div>
+    <div class="topbar-subtitle">Manage network storage mounts used as backup targets</div>
+  </div>
+  <div class="topbar-actions">
+    <a href="/nfs" class="btn btn-ghost btn-sm">🔄 Refresh</a>
+  </div>
+</div>
+
+<div class="content">
+
+  {% if not is_linux %}
+  <div class="linux-warn">
+    ⚠ NFS management requires Linux. This server is running on
+    <strong>{{ request.environ.get('SERVER_SOFTWARE', 'non-Linux OS') }}</strong>.
+    Mount/unmount operations will work on the deployed Linux server.
+  </div>
+  {% endif %}
+
+  <!-- Currently mounted shares -->
+  <h3 style="font-size:15px; font-weight:600; margin-bottom:14px;">
+    📡 Mounted Shares
+    {% if mounts %}
+      <span class="badge badge-green" style="margin-left:8px; vertical-align:middle;">{{ mounts|length }} active</span>
+    {% endif %}
+  </h3>
+
+  {% if mounts %}
+  <div class="nfs-grid">
+    {% for m in mounts %}
+    <div class="nfs-card">
+      <div class="nfs-header">
+        <div>
+          <div class="nfs-device">{{ m.device }}</div>
+          <div class="nfs-mountpoint">→ {{ m.mountpoint }}</div>
+        </div>
+        <span class="badge badge-{{ 'purple' if m.fstype == 'nfs4' else 'gray' }}">
+          {{ m.fstype | upper }}
+        </span>
+      </div>
+
+      {% if m.total_gb %}
+      <div class="disk-bar-wrap">
+        <div class="disk-bar-label">
+          <span>{{ m.used_gb }} GB used</span>
+          <span>{{ m.pct_used }}%</span>
+        </div>
+        <div class="disk-bar">
+          <div class="disk-bar-fill {% if m.pct_used > 90 %}danger{% elif m.pct_used > 75 %}warn{% endif %}"
+               style="width: {{ m.pct_used }}%"></div>
+        </div>
+      </div>
+      <div class="disk-stats">
+        <div class="ds"><span class="ds-val">{{ m.total_gb }} GB</span><br><span class="ds-lbl">Total</span></div>
+        <div class="ds"><span class="ds-val" style="color:var(--success)">{{ m.free_gb }} GB</span><br><span class="ds-lbl">Free</span></div>
+        <div class="ds"><span class="ds-val" style="color:var(--warning)">{{ m.used_gb }} GB</span><br><span class="ds-lbl">Used</span></div>
+      </div>
+      {% endif %}
+
+      <div class="nfs-actions">
+        <a href="/jobs/create?dest={{ m.mountpoint|urlencode }}"
+           class="btn btn-primary btn-sm">📋 Use as Target</a>
+        <form method="post" action="/nfs/umount"
+              onsubmit="return confirm('Unmount {{ m.mountpoint }}?')">
+          <input type="hidden" name="mountpoint" value="{{ m.mountpoint }}" />
+          <button class="btn btn-danger btn-sm" type="submit">⏏ Unmount</button>
+        </form>
+      </div>
+    </div>
+    {% endfor %}
+  </div>
+  {% else %}
+  <div class="empty-state" style="margin-bottom:28px;">
+    <div class="empty-icon">📡</div>
+    <p>No NFS shares currently mounted.</p>
+  </div>
+  {% endif %}
+
+  <!-- Mount new share form -->
+  <h3 style="font-size:15px; font-weight:600; margin-bottom:14px;">➕ Mount New Share</h3>
+  <div class="mount-form-card">
+    <form method="post" action="/nfs/mount" id="mountForm">
+      <div class="form-row-3" style="margin-bottom:14px;">
+        <div class="form-group" style="margin:0;">
+          <label class="form-label" for="server">NFS Server</label>
+          <input id="server" class="form-control" type="text" name="server"
+                 placeholder="e.g. 192.168.1.100" required />
+        </div>
+        <div class="form-group" style="margin:0;">
+          <label class="form-label" for="export">Export Path</label>
+          <input id="export" class="form-control" type="text" name="export"
+                 placeholder="e.g. /mnt/backup" required />
+        </div>
+        <div class="form-group" style="margin:0;">
+          <label class="form-label" for="nfs_version">NFS Version</label>
+          <select id="nfs_version" class="form-control" name="nfs_version">
+            <option value="4">NFSv4</option>
+            <option value="3">NFSv3</option>
+            <option value="">Auto</option>
+          </select>
+        </div>
+      </div>
+
+      <div class="form-row-2" style="margin-bottom:14px;">
+        <div class="form-group" style="margin:0;">
+          <label class="form-label" for="mountpoint">Mount Point (local path)</label>
+          <input id="mountpoint" class="form-control" type="text" name="mountpoint"
+                 placeholder="e.g. /mnt/nfs-backup" required />
+        </div>
+        <div class="form-group" style="margin:0;">
+          <label class="form-label" for="extra_opts">Extra Options (optional)</label>
+          <input id="extra_opts" class="form-control" type="text" name="extra_opts"
+                 placeholder="e.g. ro,noatime" />
+        </div>
+      </div>
+
+      <button type="submit" class="btn btn-primary" {% if not is_linux %}disabled title="Linux only"{% endif %}>
+        📡 Mount Share
+      </button>
+      {% if not is_linux %}
+      <span class="text-muted text-small" style="margin-left:10px;">Disabled on non-Linux</span>
+      {% endif %}
+    </form>
+  </div>
+
+</div>
+{% endblock %}

@@ -7,6 +7,8 @@ import sys
 import uuid
 import threading
 import time
+import platform
+import subprocess
 import json
 from datetime import datetime
 from functools import wraps
@@ -18,6 +20,8 @@ from flask import (
 )
 
 from backup_core import run_backup, list_vms
+
+IS_LINUX = platform.system() == 'Linux'
 
 # ── APScheduler (optional graceful degradation) ──────────────────────────────
 try:
@@ -49,6 +53,137 @@ scheduler = None
 if HAS_SCHEDULER:
     scheduler = BackgroundScheduler(daemon=True)
     scheduler.start()
+
+# ── VM list cache ─────────────────────────────────────────────────────────────
+# Keyed by (host, user) so different users get separate caches.
+_vm_cache: dict = {}          # key -> {'vms': [...], 'ts': float, 'error': str|None}
+_vm_cache_lock = threading.Lock()
+VM_CACHE_TTL = 60             # seconds before background refresh
+
+
+def _cache_key(host, user):
+    return f'{host}::{user}'
+
+
+def get_cached_vms(host, user, password, no_verify_ssl=False, force=False):
+    """
+    Return VM list from cache. If cache is missing or expired, fetch synchronously.
+    A background thread keeps the cache warm after the first fetch.
+    """
+    key = _cache_key(host, user)
+    with _vm_cache_lock:
+        entry = _vm_cache.get(key)
+
+    now = time.time()
+    if not force and entry and (now - entry['ts']) < VM_CACHE_TTL:
+        # Fresh cache — return immediately
+        return entry['vms'], entry['error'], entry['ts']
+
+    if not force and entry:
+        # Stale but exists — return stale data and kick off background refresh
+        _start_bg_refresh(host, user, password, no_verify_ssl)
+        return entry['vms'], entry['error'], entry['ts']
+
+    # No cache at all — must fetch synchronously (first load or forced refresh)
+    return _fetch_and_cache(host, user, password, no_verify_ssl)
+
+
+def _fetch_and_cache(host, user, password, no_verify_ssl):
+    """Fetch VM list from vSphere and store in cache. Returns (vms, error, ts)."""
+    key = _cache_key(host, user)
+    try:
+        vms = list_vms(host, user, password, no_verify_ssl=no_verify_ssl)
+        order = {'poweredOn': 0, 'suspended': 1, 'poweredOff': 2}
+        vms.sort(key=lambda v: (order.get(v['power_state'], 3), v['name'].lower()))
+        entry = {'vms': vms, 'ts': time.time(), 'error': None}
+    except Exception as e:
+        # Keep old VM list on error, just update error message
+        with _vm_cache_lock:
+            old = _vm_cache.get(key, {})
+        entry = {'vms': old.get('vms', []), 'ts': time.time(), 'error': str(e)}
+    with _vm_cache_lock:
+        _vm_cache[key] = entry
+    return entry['vms'], entry['error'], entry['ts']
+
+
+_bg_refresh_running: set = set()
+
+
+def _start_bg_refresh(host, user, password, no_verify_ssl):
+    """Kick off a background thread to refresh the cache if not already running."""
+    key = _cache_key(host, user)
+    if key in _bg_refresh_running:
+        return
+    _bg_refresh_running.add(key)
+
+    def _worker():
+        try:
+            _fetch_and_cache(host, user, password, no_verify_ssl)
+        finally:
+            _bg_refresh_running.discard(key)
+
+    t = threading.Thread(target=_worker, daemon=True)
+    t.start()
+
+
+# ── NFS management (Linux only) ─────────────────────────────────────────────────
+
+def list_nfs_mounts():
+    """Return list of currently mounted NFS/CIFS shares from /proc/mounts."""
+    mounts = []
+    if not IS_LINUX:
+        return mounts
+    try:
+        with open('/proc/mounts', 'r') as f:
+            for line in f:
+                parts = line.strip().split()
+                if len(parts) >= 4 and parts[2] in ('nfs', 'nfs4', 'cifs'):
+                    info = {'device': parts[0], 'mountpoint': parts[1],
+                            'fstype': parts[2], 'options': parts[3]}
+                    # Add disk space info
+                    try:
+                        st = os.statvfs(parts[1])
+                        total = st.f_blocks * st.f_frsize
+                        free  = st.f_available * st.f_frsize
+                        used  = total - free
+                        info['total_gb']  = round(total / (1024**3), 1)
+                        info['used_gb']   = round(used  / (1024**3), 1)
+                        info['free_gb']   = round(free  / (1024**3), 1)
+                        info['pct_used']  = int(used / total * 100) if total > 0 else 0
+                    except Exception:
+                        info.update({'total_gb': 0, 'used_gb': 0, 'free_gb': 0, 'pct_used': 0})
+                    mounts.append(info)
+    except (FileNotFoundError, PermissionError):
+        pass
+    return mounts
+
+
+def mount_nfs(server, export, mountpoint, nfs_version='4', extra_opts=''):
+    """Mount an NFS share (Linux only)."""
+    if not IS_LINUX:
+        raise RuntimeError('NFS mounting is only supported on Linux')
+    os.makedirs(mountpoint, exist_ok=True)
+    opts = []
+    if nfs_version:
+        opts.append(f'vers={nfs_version}')
+    if extra_opts:
+        opts.append(extra_opts.strip())
+    cmd = ['mount', '-t', 'nfs']
+    if opts:
+        cmd += ['-o', ','.join(opts)]
+    cmd += [f'{server}:{export}', mountpoint]
+    result = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
+    if result.returncode != 0:
+        raise RuntimeError((result.stderr or result.stdout or 'mount failed').strip())
+
+
+def umount_nfs(mountpoint):
+    """Unmount an NFS share (Linux only)."""
+    if not IS_LINUX:
+        raise RuntimeError('NFS unmounting is only supported on Linux')
+    result = subprocess.run(['umount', mountpoint], capture_output=True, text=True, timeout=30)
+    if result.returncode != 0:
+        raise RuntimeError((result.stderr or result.stdout or 'umount failed').strip())
 
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
@@ -88,9 +223,14 @@ def run_job_thread(jid):
     info = jobs.get(jid)
     if not info:
         return
-    info['status'] = 'running'
-    info['started'] = time.time()
+    info['status']   = 'running'
+    info['started']  = time.time()
+    info['progress'] = {'pct': 0, 'phase': 'starting', 'detail': 'Initializing…'}
     log_path = str(JOBS_DIR / jid / 'backup.log')
+
+    def progress_cb(prog):
+        info['progress'] = prog
+
     try:
         run_backup(
             host=info['host'],
@@ -105,8 +245,10 @@ def run_job_thread(jid):
             sftp_password=info.get('sftp_password') or None,
             sftp_key=None,
             log_path=log_path,
+            progress_cb=progress_cb,
         )
-        info['status'] = 'finished'
+        info['status']   = 'finished'
+        info['progress'] = {'pct': 100, 'phase': 'done', 'detail': 'Backup completed successfully'}
     except Exception as e:
         info['status'] = f'failed ({e})'
 
@@ -200,27 +342,26 @@ def index():
 @app.route('/login', methods=['GET', 'POST'])
 def login():
     if request.method == 'POST':
-        host         = request.form.get('host', '').strip()
-        user         = request.form.get('user', '').strip()
-        password     = request.form.get('password', '')
+        host          = request.form.get('host', '').strip()
+        user          = request.form.get('user', '').strip()
+        password      = request.form.get('password', '')
         no_verify_ssl = 'no_verify_ssl' in request.form
 
         if not (host and user and password):
             flash('Host, username and password are required.', 'danger')
             return render_template('login.html')
 
-        # Verify credentials by listing VMs
-        try:
-            list_vms(host, user, password, no_verify_ssl=no_verify_ssl)
-        except Exception as e:
-            flash(f'Connection failed: {e}', 'danger')
+        # Verify credentials — also warms the VM cache for instant /vms load
+        vm_list, error, _ = _fetch_and_cache(host, user, password, no_verify_ssl)
+        if error and not vm_list:
+            flash(f'Connection failed: {error}', 'danger')
             return render_template('login.html')
 
         session['host']          = host
         session['user']          = user
         session['password']      = password
         session['no_verify_ssl'] = no_verify_ssl
-        flash(f'Connected to {host} successfully.', 'success')
+        flash(f'Connected to {host} — {len(vm_list)} VMs found.', 'success')
         return redirect(url_for('vms'))
 
     return render_template('login.html')
@@ -238,32 +379,28 @@ def logout():
 @app.route('/vms')
 @login_required
 def vms():
-    error = None
-    vm_list = []
-    try:
-        vm_list = list_vms(
-            session['host'], session['user'], session['password'],
-            no_verify_ssl=session.get('no_verify_ssl', False)
-        )
-        # Sort: powered on first, then alphabetical
-        order = {'poweredOn': 0, 'suspended': 1, 'poweredOff': 2}
-        vm_list.sort(key=lambda v: (order.get(v['power_state'], 3), v['name'].lower()))
-    except Exception as e:
-        error = str(e)
-    return render_template('vms.html', vms=vm_list, error=error)
+    force = request.args.get('refresh') == '1'
+    vm_list, error, cache_ts = get_cached_vms(
+        session['host'], session['user'], session['password'],
+        no_verify_ssl=session.get('no_verify_ssl', False),
+        force=force,
+    )
+    cache_age = int(time.time() - cache_ts) if cache_ts else None
+    return render_template('vms.html', vms=vm_list, error=error, cache_age=cache_age)
 
 
 @app.route('/api/vms')
 @login_required
 def api_vms():
-    try:
-        vm_list = list_vms(
-            session['host'], session['user'], session['password'],
-            no_verify_ssl=session.get('no_verify_ssl', False)
-        )
-        return jsonify(vm_list)
-    except Exception as e:
-        return jsonify({'error': str(e)}), 500
+    force = request.args.get('refresh') == '1'
+    vm_list, error, cache_ts = get_cached_vms(
+        session['host'], session['user'], session['password'],
+        no_verify_ssl=session.get('no_verify_ssl', False),
+        force=force,
+    )
+    if error and not vm_list:
+        return jsonify({'error': error}), 500
+    return jsonify({'vms': vm_list, 'cache_age': int(time.time() - cache_ts) if cache_ts else None})
 
 
 # ── Create Job ────────────────────────────────────────────────────────────────
@@ -316,17 +453,16 @@ def create_job():
         return redirect(url_for('job_detail', jobid=jid))
 
     # GET: load VM list for the dropdown
-    selected_vm  = request.args.get('vm', '')
+    selected_vm   = request.args.get('vm', '')
     show_schedule = bool(request.args.get('schedule', ''))
-    vm_list = []
-    try:
-        vm_list = list_vms(
-            session['host'], session['user'], session['password'],
-            no_verify_ssl=session.get('no_verify_ssl', False)
-        )
-        vm_list.sort(key=lambda v: v['name'].lower())
-    except Exception as e:
-        flash(f'Could not load VM list: {e}', 'danger')
+    vm_list, error, _ = get_cached_vms(
+        session['host'], session['user'], session['password'],
+        no_verify_ssl=session.get('no_verify_ssl', False)
+    )
+    if error and not vm_list:
+        flash(f'Could not load VM list: {error}', 'danger')
+    # Sort alphabetically for the dropdown
+    vm_list = sorted(vm_list, key=lambda v: v['name'].lower())
 
     return render_template(
         'create_job.html',
@@ -380,7 +516,11 @@ def api_job_status(jobid):
     info = jobs.get(jobid)
     if not info:
         return jsonify({'error': 'not found'}), 404
-    return jsonify({'status': info.get('status', 'unknown'), 'id': jobid})
+    return jsonify({
+        'status':   info.get('status', 'unknown'),
+        'id':       jobid,
+        'progress': info.get('progress', {'pct': 0, 'phase': '', 'detail': ''}),
+    })
 
 
 @app.route('/job/<jobid>/cancel-schedule', methods=['POST'])
@@ -405,6 +545,56 @@ def cancel_schedule(jobid):
 @app.template_filter('startswith')
 def startswith_filter(value, prefix):
     return str(value).startswith(prefix)
+
+
+# ── NFS Management Routes ─────────────────────────────────────────────────────────
+
+@app.route('/nfs')
+@login_required
+def nfs_manager():
+    mounts = list_nfs_mounts()
+    return render_template('nfs.html', mounts=mounts, is_linux=IS_LINUX)
+
+
+@app.route('/nfs/mount', methods=['POST'])
+@login_required
+def nfs_mount():
+    server     = request.form.get('server', '').strip()
+    export     = request.form.get('export', '').strip()
+    mountpoint = request.form.get('mountpoint', '').strip()
+    nfs_ver    = request.form.get('nfs_version', '4')
+    extra_opts = request.form.get('extra_opts', '').strip()
+
+    if not (server and export and mountpoint):
+        flash('Server, export path, and mount point are required.', 'danger')
+        return redirect(url_for('nfs_manager'))
+    try:
+        mount_nfs(server, export, mountpoint, nfs_version=nfs_ver, extra_opts=extra_opts)
+        flash(f'Mounted {server}:{export} → {mountpoint} successfully.', 'success')
+    except Exception as e:
+        flash(f'Mount failed: {e}', 'danger')
+    return redirect(url_for('nfs_manager'))
+
+
+@app.route('/nfs/umount', methods=['POST'])
+@login_required
+def nfs_umount():
+    mountpoint = request.form.get('mountpoint', '').strip()
+    if not mountpoint:
+        flash('Mount point is required.', 'danger')
+        return redirect(url_for('nfs_manager'))
+    try:
+        umount_nfs(mountpoint)
+        flash(f'Unmounted {mountpoint} successfully.', 'success')
+    except Exception as e:
+        flash(f'Unmount failed: {e}', 'danger')
+    return redirect(url_for('nfs_manager'))
+
+
+@app.route('/api/nfs')
+@login_required
+def api_nfs():
+    return jsonify(list_nfs_mounts())
 
 
 # ── Main ──────────────────────────────────────────────────────────────────────

@@ -112,10 +112,18 @@
 <div class="topbar">
   <div>
     <div class="topbar-title">Virtual Machines</div>
-    <div class="topbar-subtitle">{{ vms|length }} VM{% if vms|length != 1 %}s{% endif %} found on <strong>{{ session.get('host') }}</strong></div>
+    <div class="topbar-subtitle">
+      {{ vms|length }} VM{% if vms|length != 1 %}s{% endif %} on <strong>{{ session.get('host') }}</strong>
+      {% if cache_age is not none %}
+        &nbsp;·&nbsp;
+        <span class="text-muted" style="font-size:12px;">
+          {% if cache_age < 5 %}just refreshed{% else %}data from {{ cache_age }}s ago{% endif %}
+        </span>
+      {% endif %}
+    </div>
   </div>
   <div class="topbar-actions">
-    <a href="/vms" class="btn btn-ghost btn-sm">🔄 Refresh</a>
+    <a href="/vms?refresh=1" class="btn btn-ghost btn-sm">🔄 Refresh</a>
     <a href="/jobs/create" class="btn btn-primary btn-sm">➕ Create Job</a>
   </div>
 </div>
@@ -183,15 +191,15 @@
       <div class="vm-stats">
         <div class="stat">
           <div class="stat-label">CPUs</div>
-          <div class="stat-value">{{ vm.num_cpu }}</div>
+          <div class="stat-value">{{ vm.num_cpu or '—' }}</div>
         </div>
         <div class="stat">
           <div class="stat-label">Memory</div>
-          <div class="stat-value">{{ (vm.memory_mb / 1024)|round(1) }} GB</div>
+          <div class="stat-value">{% if vm.memory_mb %}{{ (vm.memory_mb / 1024)|round(1) }} GB{% else %}—{% endif %}</div>
         </div>
         <div class="stat">
           <div class="stat-label">Disk Used</div>
-          <div class="stat-value">{{ vm.committed_gb }} GB</div>
+          <div class="stat-value">{{ vm.committed_gb or 0 }} GB</div>
         </div>
         <div class="stat">
           <div class="stat-label">IP Address</div>

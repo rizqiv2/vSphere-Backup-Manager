@@ -143,10 +143,16 @@
       <div class="section-card">
         <div class="section-card-header">📁 Destination</div>
         <div class="section-card-body">
+          <!-- NFS quick-select -->
+          <div id="nfsTargets" style="margin-bottom:14px; display:none;">
+            <div class="form-label" style="margin-bottom:6px;">📡 NFS Mounts (click to use as destination)</div>
+            <div id="nfsMountList" style="display:flex; gap:8px; flex-wrap:wrap;"></div>
+          </div>
+
           <div class="form-group">
             <label class="form-label" for="dest">Local backup path</label>
             <input id="dest" class="form-control" type="text" name="dest"
-                   value="./backups" placeholder="e.g. D:\Backups or /mnt/nas/backups" required />
+                   value="./backups" placeholder="e.g. /mnt/nfs-backup or /data/vmbackups" required />
           </div>
           <div class="form-check">
             <input type="checkbox" id="compress" name="compress" />
@@ -320,5 +326,32 @@
   {% if show_schedule %}
   selectSchedule('daily');
   {% endif %}
+
+  // Pre-fill dest from ?dest= query param (e.g. from NFS manager "Use as Target")
+  const urlDest = new URLSearchParams(window.location.search).get('dest');
+  if (urlDest) document.getElementById('dest').value = urlDest;
+
+  // Load NFS mounts for quick-select
+  fetch('/api/nfs')
+    .then(r => r.json())
+    .then(mounts => {
+      if (!mounts || !mounts.length) return;
+      const wrap = document.getElementById('nfsTargets');
+      const list = document.getElementById('nfsMountList');
+      mounts.forEach(m => {
+        const btn = document.createElement('button');
+        btn.type = 'button';
+        btn.className = 'btn btn-secondary btn-sm';
+        btn.innerHTML = `📡 ${m.mountpoint} <span style="color:var(--text-muted);font-size:11px;margin-left:4px;">${m.free_gb}GB free</span>`;
+        btn.onclick = () => {
+          document.getElementById('dest').value = m.mountpoint;
+          list.querySelectorAll('button').forEach(b => b.style.borderColor = '');
+          btn.style.borderColor = 'var(--accent)';
+        };
+        list.appendChild(btn);
+      });
+      wrap.style.display = '';
+    })
+    .catch(() => {});
 </script>
 {% endblock %}

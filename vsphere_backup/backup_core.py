@@ -113,19 +113,27 @@ def find_datacenter_for_datastore(content, datastore_name):
     return None
 
 
-def download_datastore_file(host, dc_name, datastore_name, ds_path, local_path, session_cookie, verify_ssl=True):
+def download_datastore_file(host, dc_name, datastore_name, ds_path, local_path,
+                            session_cookie, verify_ssl=True, progress_cb=None):
+    """Download a file from a vSphere datastore. progress_cb(bytes_done, bytes_total) is optional."""
     encoded_path = urllib.parse.quote(ds_path, safe='')
-    url = f"https://{host}/folder/{encoded_path}?dcPath={urllib.parse.quote(dc_name)}&dsName={urllib.parse.quote(datastore_name)}"
+    url = (f"https://{host}/folder/{encoded_path}"
+           f"?dcPath={urllib.parse.quote(dc_name)}&dsName={urllib.parse.quote(datastore_name)}")
     headers = {"Cookie": f"vmware_soap_session={session_cookie}"}
     print(f"Downloading {ds_path} from datastore {datastore_name} to {local_path}")
     with requests.get(url, headers=headers, stream=True, verify=verify_ssl) as r:
         r.raise_for_status()
+        total_bytes = int(r.headers.get('Content-Length', 0))
+        done_bytes = 0
         os.makedirs(os.path.dirname(local_path), exist_ok=True)
         with open(local_path, 'wb') as f:
-            for chunk in r.iter_content(chunk_size=10 * 1024 * 1024):
+            for chunk in r.iter_content(chunk_size=4 * 1024 * 1024):
                 if chunk:
                     f.write(chunk)
-    print("Download completed")
+                    done_bytes += len(chunk)
+                    if progress_cb:
+                        progress_cb(done_bytes, total_bytes)
+    print(f"Download completed ({done_bytes // (1024*1024)} MB)")
 
 
 def extract_session_cookie(si):
@@ -221,31 +229,42 @@ def upload_via_sftp(host, user, password, key_filename, local_path, remote_dir):
 
 
 def run_backup(host, user, password, vm_name, dest, compress=False, no_verify_ssl=False,
-               sftp_host=None, sftp_user=None, sftp_password=None, sftp_key=None, log_path=None):
-    """Run full backup flow. If log_path is provided, stdout/stderr will be redirected there."""
+               sftp_host=None, sftp_user=None, sftp_password=None, sftp_key=None,
+               log_path=None, progress_cb=None):
+    """Run full backup flow. progress_cb(phase, pct, detail) is called with live status updates."""
     if log_path:
         logfile = open(log_path, 'ab')
-        # use binary logfile; redirect prints into it
         def _wrap():
             with redirect_stdout(logfile), redirect_stderr(logfile):
                 return _run_backup_impl(host, user, password, vm_name, dest, compress, no_verify_ssl,
-                                        sftp_host, sftp_user, sftp_password, sftp_key)
+                                        sftp_host, sftp_user, sftp_password, sftp_key,
+                                        progress_cb=progress_cb)
         try:
             return _wrap()
         finally:
             logfile.close()
     else:
         return _run_backup_impl(host, user, password, vm_name, dest, compress, no_verify_ssl,
-                                sftp_host, sftp_user, sftp_password, sftp_key)
+                                sftp_host, sftp_user, sftp_password, sftp_key,
+                                progress_cb=progress_cb)
 
 
 def _run_backup_impl(host, user, password, vm_name, dest, compress, no_verify_ssl,
-                     sftp_host, sftp_user, sftp_password, sftp_key):
+                     sftp_host, sftp_user, sftp_password, sftp_key, progress_cb=None):
+    def _prog(phase, pct, detail=''):
+        if progress_cb:
+            try:
+                progress_cb({'phase': phase, 'pct': pct, 'detail': detail})
+            except Exception:
+                pass
+
     si = None
     try:
+        _prog('connecting', 0, 'Connecting to vCenter…')
         si = get_si(host, user, password, no_verify_ssl=no_verify_ssl)
         content = si.RetrieveContent()
-        # find vm
+
+        _prog('connecting', 2, f'Looking up VM: {vm_name}')
         obj_view = content.viewManager.CreateContainerView(content.rootFolder, [vim.VirtualMachine], True)
         vm = None
         for v in obj_view.view:
@@ -259,8 +278,10 @@ def _run_backup_impl(host, user, password, vm_name, dest, compress, no_verify_ss
         snap_name = f"backup-{int(time.time())}"
         created_snapshot = False
         try:
+            _prog('snapshot', 3, 'Creating snapshot…')
             create_snapshot(vm, snap_name, desc="Automated backup snapshot", memory=False, quiesce=False)
             created_snapshot = True
+            _prog('snapshot', 5, 'Snapshot created')
 
             session_cookie = extract_session_cookie(si)
             if not session_cookie:
@@ -272,8 +293,14 @@ def _run_backup_impl(host, user, password, vm_name, dest, compress, no_verify_ss
             if vmx_ref:
                 all_refs.append(vmx_ref)
 
+            total_files = len(all_refs)
+            # Download phase: 5% -> 90%
+            DOWNLOAD_START = 5
+            DOWNLOAD_END   = 90
+            download_range = DOWNLOAD_END - DOWNLOAD_START
+
             downloaded_files = []
-            for ref in all_refs:
+            for file_idx, ref in enumerate(all_refs):
                 ds_name, ds_path = parse_datastore_path(ref)
                 dc = find_datacenter_for_datastore(content, ds_name)
                 if not dc:
@@ -281,12 +308,41 @@ def _run_backup_impl(host, user, password, vm_name, dest, compress, no_verify_ss
                 dc_name = dc.name
                 safe_path = ds_path.replace('/', os.sep)
                 local_file = os.path.join(dest, ds_name, safe_path)
-                download_datastore_file(host, dc_name, ds_name, ds_path, local_file, session_cookie, verify_ssl=not no_verify_ssl)
+
+                file_base_pct = DOWNLOAD_START + int((file_idx / total_files) * download_range)
+                file_share    = download_range / total_files
+
+                def make_dl_cb(fidx, total, base_pct, share, fname):
+                    def _dl_cb(done, total_b):
+                        if total_b > 0:
+                            file_pct = done / total_b
+                            overall_pct = int(base_pct + file_pct * share)
+                            done_mb  = done // (1024 * 1024)
+                            total_mb = total_b // (1024 * 1024)
+                            detail = (f'File {fidx+1}/{total}: {fname} — '
+                                      f'{done_mb} / {total_mb} MB '
+                                      f'({int(file_pct*100)}%)')
+                        else:
+                            overall_pct = base_pct
+                            detail = f'File {fidx+1}/{total}: {fname}'
+                        _prog('downloading', overall_pct, detail)
+                    return _dl_cb
+
+                _prog('downloading', file_base_pct,
+                      f'Starting file {file_idx+1}/{total_files}: {os.path.basename(ds_path)}')
+                download_datastore_file(
+                    host, dc_name, ds_name, ds_path, local_file, session_cookie,
+                    verify_ssl=not no_verify_ssl,
+                    progress_cb=make_dl_cb(file_idx, total_files, file_base_pct,
+                                           file_share, os.path.basename(ds_path))
+                )
                 downloaded_files.append(local_file)
 
+            _prog('compressing', 90, 'Download complete')
             final_files = []
             for f in downloaded_files:
                 if compress:
+                    _prog('compressing', 92, f'Compressing {os.path.basename(f)}…')
                     cf = maybe_compress(f)
                     final_files.append(cf)
                 else:
@@ -295,9 +351,11 @@ def _run_backup_impl(host, user, password, vm_name, dest, compress, no_verify_ss
             if sftp_host:
                 if not sftp_user:
                     raise Exception('SFTP user required')
+                _prog('uploading', 95, f'Uploading to {sftp_host}…')
                 for f in final_files:
                     upload_via_sftp(sftp_host, sftp_user, sftp_password, sftp_key, f, os.path.basename(dest))
 
+            _prog('cleanup', 97, 'Removing snapshot…')
             print('Backup completed successfully')
         finally:
             if created_snapshot:
@@ -311,6 +369,7 @@ def _run_backup_impl(host, user, password, vm_name, dest, compress, no_verify_ss
                             print(f'Failed to remove snapshot: {e}', file=sys.stderr)
                     else:
                         print('Snapshot object not found in tree; may have been removed already')
+        _prog('done', 100, 'Backup finished successfully')
     finally:
         if si:
             try:
