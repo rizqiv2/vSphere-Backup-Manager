@@ -135,7 +135,8 @@
         <div class="section-card-body">
           <div class="form-group" style="margin:0;">
             <label class="form-label" for="vm_name">Select VM to back up</label>
-            <select id="vm_name" name="vm_name" class="form-control" required>
+            <select id="vm_name" name="vm_name" class="form-control" required
+                    onchange="onVmChange(this.value)">
               <option value="">— Choose a VM —</option>
               {% for vm in vms %}
               <option value="{{ vm.name }}"
@@ -146,6 +147,27 @@
               </option>
               {% endfor %}
             </select>
+          </div>
+        </div>
+      </div>
+
+      <!-- Disk Selection (shown after VM pick) -->
+      <input type="hidden" name="disk_selection_shown" id="disk_selection_shown" value="" />
+      <div class="section-card" id="diskCard" style="display:none;">
+        <div class="section-card-header">
+          💾 Select Disks to Backup
+          <span id="diskCardBadge" style="margin-left:auto;font-size:12px;color:var(--text-muted);font-weight:500;"></span>
+        </div>
+        <div class="section-card-body">
+          <div id="diskLoader" style="text-align:center;padding:24px;color:var(--text-muted);">
+            <span class="spinner" style="vertical-align:middle;margin-right:8px;"></span> Loading disk info…
+          </div>
+          <div id="diskList"></div>
+          <div id="diskTip" style="display:none;margin-top:14px;padding:12px 16px;
+               background:rgba(6,182,212,0.06);border:1px solid rgba(6,182,212,0.15);
+               border-radius:var(--radius-sm);font-size:13px;color:var(--text-secondary);">
+            💡 <strong>Tip:</strong> Uncheck large data disks (e.g. video storage) to skip them.
+            The VM config (.vmx) is always included. For ipcam VMs, keep only the small OS disk checked.
           </div>
         </div>
       </div>
@@ -338,9 +360,97 @@
   selectSchedule('daily');
   {% endif %}
 
-  // Pre-fill dest from ?dest= query param (e.g. from NFS manager "Use as Target")
+  // Pre-fill dest from ?dest= query param
   const urlDest = new URLSearchParams(window.location.search).get('dest');
   if (urlDest) document.getElementById('dest').value = urlDest;
+
+  // ── Disk Selection ──────────────────────────────────────────────────────────
+  function escHtml(s) {
+    return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+  }
+
+  function onVmChange(vmName) {
+    const diskCard = document.getElementById('diskCard');
+    if (!vmName) {
+      diskCard.style.display = 'none';
+      document.getElementById('disk_selection_shown').value = '';
+      return;
+    }
+    diskCard.style.display = '';
+    document.getElementById('disk_selection_shown').value = '1';
+    document.getElementById('diskLoader').style.display = 'block';
+    document.getElementById('diskList').innerHTML = '';
+    document.getElementById('diskTip').style.display = 'none';
+    document.getElementById('diskCardBadge').textContent = '';
+
+    fetch('/api/vm/' + encodeURIComponent(vmName) + '/disks')
+      .then(r => r.json())
+      .then(disks => {
+        document.getElementById('diskLoader').style.display = 'none';
+        if (!Array.isArray(disks) || !disks.length) {
+          document.getElementById('diskList').innerHTML =
+            '<div style="color:var(--text-muted);font-size:13px;">No virtual disks found on this VM.</div>';
+          return;
+        }
+
+        // Sort smallest first (OS disk is usually smallest)
+        disks.sort((a, b) => a.size_gb - b.size_gb);
+
+        let html = '';
+        disks.forEach((disk, i) => {
+          const sizeLabel = disk.size_gb >= 1000
+            ? (disk.size_gb/1024).toFixed(1) + ' TB'
+            : disk.size_gb + ' GB';
+          const sizeColor = disk.size_gb > 100 ? 'var(--warning)' : 'var(--success)';
+          const hint = i === 0
+            ? ' <span style="font-size:10px;color:var(--success);font-weight:700;margin-left:4px;">OS</span>'
+            : '';
+          html += `<div style="display:flex;align-items:center;gap:12px;padding:12px 0;
+                               border-bottom:${i < disks.length-1 ? '1px solid var(--border)' : 'none'}">
+            <input type="checkbox" id="disk_${i}" name="disk_filter"
+                   value="${escHtml(disk.path)}" checked
+                   style="width:18px;height:18px;accent-color:var(--accent);flex-shrink:0;cursor:pointer;" />
+            <label for="disk_${i}" style="flex:1;cursor:pointer;">
+              <div style="font-weight:600;font-size:13.5px;">${escHtml(disk.label)}${hint}</div>
+              <div style="font-family:'JetBrains Mono',monospace;font-size:11.5px;
+                          color:var(--text-muted);margin-top:3px;">${escHtml(disk.path)}</div>
+            </label>
+            <span style="background:rgba(255,255,255,0.04);border:1px solid var(--border);
+                         padding:4px 10px;border-radius:100px;font-size:12px;
+                         font-weight:700;color:${sizeColor};flex-shrink:0;">${sizeLabel}</span>
+          </div>`;
+        });
+        html += `<div style="display:flex;gap:8px;margin-top:12px;flex-wrap:wrap;">
+          <button type="button" class="btn btn-secondary btn-sm" onclick="selectAllDisks(true)">☑ All</button>
+          <button type="button" class="btn btn-secondary btn-sm" onclick="selectAllDisks(false)">☐ None</button>
+          <button type="button" class="btn btn-secondary btn-sm" onclick="selectOsOnly()"
+                  title="Select only the smallest disk (usually the OS disk)">🖥 OS Only</button>
+        </div>`;
+
+        document.getElementById('diskList').innerHTML = html;
+        document.getElementById('diskTip').style.display = '';
+        document.getElementById('diskCardBadge').textContent =
+          disks.length + ' disk' + (disks.length > 1 ? 's' : '') + ' found';
+      })
+      .catch(() => {
+        document.getElementById('diskLoader').style.display = 'none';
+        document.getElementById('diskList').innerHTML =
+          '<div style="color:var(--text-muted);font-size:13px;">⚠ Failed to load disk list</div>';
+      });
+  }
+
+  function selectAllDisks(checked) {
+    document.querySelectorAll('input[name="disk_filter"]').forEach(cb => cb.checked = checked);
+  }
+  function selectOsOnly() {
+    // Smallest disk is first (sorted above)
+    const cbs = document.querySelectorAll('input[name="disk_filter"]');
+    cbs.forEach((cb, i) => { cb.checked = (i === 0); });
+  }
+
+  // Auto-trigger disk load if VM pre-selected (from ?vm=)
+  const initVm = document.getElementById('vm_name').value;
+  if (initVm) onVmChange(initVm);
 
   // Load NFS mounts for quick-select
   fetch('/api/nfs')

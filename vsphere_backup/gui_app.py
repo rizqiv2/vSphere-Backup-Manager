@@ -203,6 +203,7 @@ def fmt_time(ts):
 
 def job_to_display(jid, info):
     """Convert internal job dict to template-friendly dict."""
+    disk_filter = info.get('disk_filter')
     return {
         'id':            jid,
         'label':         info.get('label', ''),
@@ -215,6 +216,8 @@ def job_to_display(jid, info):
         'schedule_type': info.get('schedule_type', 'now'),
         'schedule_time': info.get('schedule_time', ''),
         'schedule_id':   info.get('schedule_id'),
+        'disk_filter':   disk_filter,
+        'disks_count':   len(disk_filter) if disk_filter is not None else None,
     }
 
 
@@ -246,6 +249,7 @@ def run_job_thread(jid):
             sftp_key=None,
             log_path=log_path,
             progress_cb=progress_cb,
+            disk_filter=info.get('disk_filter'),  # None = all disks
         )
         info['status']   = 'finished'
         info['progress'] = {'pct': 100, 'phase': 'done', 'detail': 'Backup completed successfully'}
@@ -257,9 +261,11 @@ def create_and_start_job(
     vm_name, dest, compress, no_verify_ssl,
     sftp_host, sftp_user, sftp_password,
     schedule_type, schedule_time, weekly_day, interval_hours,
-    label=''
+    label='', disk_filter=None
 ):
-    """Create a job entry and either run immediately or register schedule."""
+    """Create a job entry and either run immediately or register schedule.
+    disk_filter: list of VMDK path strings to include, or None for all.
+    """
     jid = datetime.now().strftime('%Y%m%d%H%M%S') + '-' + uuid.uuid4().hex[:6]
     job_dir = JOBS_DIR / jid
     job_dir.mkdir(parents=True, exist_ok=True)
@@ -282,6 +288,7 @@ def create_and_start_job(
         'schedule_type': schedule_type,
         'schedule_time': schedule_time,
         'schedule_id':   None,
+        'disk_filter':   disk_filter,  # None = back up all disks
     }
     jobs[jid] = info
 
@@ -403,6 +410,20 @@ def api_vms():
     return jsonify({'vms': vm_list, 'cache_age': int(time.time() - cache_ts) if cache_ts else None})
 
 
+@app.route('/api/vm/<vm_name>/disks')
+@login_required
+def api_vm_disks(vm_name):
+    """Return disk list for a specific VM (from cache)."""
+    vm_list, error, _ = get_cached_vms(
+        session['host'], session['user'], session['password'],
+        no_verify_ssl=session.get('no_verify_ssl', False)
+    )
+    for vm in vm_list:
+        if vm['name'] == vm_name:
+            return jsonify(vm.get('disks', []))
+    return jsonify({'error': f'VM "{vm_name}" not found'}), 404
+
+
 # ── Create Job ────────────────────────────────────────────────────────────────
 
 @app.route('/jobs/create', methods=['GET', 'POST'])
@@ -435,6 +456,14 @@ def create_job():
         else:
             sched_time = ''
 
+        # disk_filter: None = all disks; list = selected disks only
+        disk_selection_shown = 'disk_selection_shown' in request.form
+        if disk_selection_shown:
+            raw_filter = request.form.getlist('disk_filter')
+            disk_filter = raw_filter if raw_filter else None
+        else:
+            disk_filter = None  # disks not shown yet = backup all
+
         jid = create_and_start_job(
             vm_name=vm_name,
             dest=dest,
@@ -448,8 +477,10 @@ def create_job():
             weekly_day=weekly_day,
             interval_hours=interval_hrs,
             label=label,
+            disk_filter=disk_filter,
         )
-        flash(f'Job created successfully!', 'success')
+        n_disks = len(disk_filter) if disk_filter is not None else 'all'
+        flash(f'Job created — {n_disks} disk(s) selected.', 'success')
         return redirect(url_for('job_detail', jobid=jid))
 
     # GET: load VM list for the dropdown

@@ -184,6 +184,18 @@
         {% if job.sftp_host %} · 📤 SFTP: {{ job.sftp_host }}{% endif %}
       </div>
     </div>
+    <div class="detail-item">
+      <div class="detail-item-label">Disks</div>
+      <div class="detail-item-val" style="font-size:13px;">
+        {% if job.disks_count is none %}
+          All disks
+        {% elif job.disks_count == 0 %}
+          <span style="color:var(--warning);">VMX only (0 disks)</span>
+        {% else %}
+          {{ job.disks_count }} disk{{ 's' if job.disks_count != 1 else '' }} selected
+        {% endif %}
+      </div>
+    </div>
   </div>
 
   {% if job.schedule_id %}

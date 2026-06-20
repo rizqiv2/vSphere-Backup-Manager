@@ -62,22 +62,45 @@ def list_vms(host, user, password, no_verify_ssl=False):
                 except Exception:
                     pass
 
+                # Disk info (label, path, size)
+                disks = []
+                try:
+                    for dev in vm.config.hardware.device:
+                        if isinstance(dev, vim.vm.device.VirtualDisk):
+                            fn = getattr(dev.backing, 'fileName', None)
+                            if not fn:
+                                continue
+                            label = ''
+                            if dev.deviceInfo:
+                                label = dev.deviceInfo.label or ''
+                            size_kb = getattr(dev, 'capacityInKB', 0) or 0
+                            disks.append({
+                                'label':   label or f'Hard disk {dev.unitNumber}',
+                                'path':    fn,
+                                'size_gb': round(size_kb / (1024 * 1024), 1),
+                                'unit':    dev.unitNumber,
+                            })
+                except Exception:
+                    pass
+
                 vms.append({
-                    'name': config.name,
+                    'name':        config.name,
                     'power_state': power_state,
-                    'num_cpu': config.numCpu,
-                    'memory_mb': config.memorySizeMB,
-                    'guest_os': config.guestFullName or config.guestId or 'Unknown',
-                    'ip_address': (guest.ipAddress or '') if guest else '',
-                    'datastores': ds_names,
+                    'num_cpu':     config.numCpu,
+                    'memory_mb':   config.memorySizeMB,
+                    'guest_os':    config.guestFullName or config.guestId or 'Unknown',
+                    'ip_address':  (guest.ipAddress or '') if guest else '',
+                    'datastores':  ds_names,
                     'committed_gb': round((storage.committed or 0) / (1024 ** 3), 2),
                     'tools_status': (guest.toolsStatus or 'unknown') if guest else 'unknown',
+                    'disks':       disks,
                 })
             except Exception as e:
                 vms.append({'name': getattr(vm, 'name', '?'), 'error': str(e),
                             'power_state': 'unknown', 'num_cpu': 0,
                             'memory_mb': 0, 'guest_os': '', 'ip_address': '',
-                            'datastores': [], 'committed_gb': 0, 'tools_status': 'unknown'})
+                            'datastores': [], 'committed_gb': 0,
+                            'tools_status': 'unknown', 'disks': []})
         obj_view.Destroy()
         return vms
     finally:
@@ -230,15 +253,18 @@ def upload_via_sftp(host, user, password, key_filename, local_path, remote_dir):
 
 def run_backup(host, user, password, vm_name, dest, compress=False, no_verify_ssl=False,
                sftp_host=None, sftp_user=None, sftp_password=None, sftp_key=None,
-               log_path=None, progress_cb=None):
-    """Run full backup flow. progress_cb(phase, pct, detail) is called with live status updates."""
+               log_path=None, progress_cb=None, disk_filter=None):
+    """Run full backup flow.
+    disk_filter: if not None, a set/list of VMDK file-ref strings to include.
+                 The VMX config file is always included regardless.
+    """
     if log_path:
         logfile = open(log_path, 'ab')
         def _wrap():
             with redirect_stdout(logfile), redirect_stderr(logfile):
                 return _run_backup_impl(host, user, password, vm_name, dest, compress, no_verify_ssl,
                                         sftp_host, sftp_user, sftp_password, sftp_key,
-                                        progress_cb=progress_cb)
+                                        progress_cb=progress_cb, disk_filter=disk_filter)
         try:
             return _wrap()
         finally:
@@ -246,11 +272,12 @@ def run_backup(host, user, password, vm_name, dest, compress=False, no_verify_ss
     else:
         return _run_backup_impl(host, user, password, vm_name, dest, compress, no_verify_ssl,
                                 sftp_host, sftp_user, sftp_password, sftp_key,
-                                progress_cb=progress_cb)
+                                progress_cb=progress_cb, disk_filter=disk_filter)
 
 
 def _run_backup_impl(host, user, password, vm_name, dest, compress, no_verify_ssl,
-                     sftp_host, sftp_user, sftp_password, sftp_key, progress_cb=None):
+                     sftp_host, sftp_user, sftp_password, sftp_key,
+                     progress_cb=None, disk_filter=None):
     def _prog(phase, pct, detail=''):
         if progress_cb:
             try:
@@ -288,7 +315,18 @@ def _run_backup_impl(host, user, password, vm_name, dest, compress, no_verify_ss
                 raise Exception('Could not extract session cookie for downloads')
 
             vmdk_refs = vm_disk_vmdk_paths(vm)
-            vmx_ref = vm_config_vmx_path(vm)
+            vmx_ref   = vm_config_vmx_path(vm)
+
+            # Apply disk filter — only download selected VMDKs
+            if disk_filter is not None:
+                disk_filter_set = set(disk_filter)
+                skipped = [r for r in vmdk_refs if r not in disk_filter_set]
+                vmdk_refs = [r for r in vmdk_refs if r in disk_filter_set]
+                if skipped:
+                    print(f"Skipping {len(skipped)} disk(s) per disk_filter: {skipped}")
+                if not vmdk_refs:
+                    print("Warning: no disks selected — backing up VMX config only.")
+
             all_refs = vmdk_refs[:]
             if vmx_ref:
                 all_refs.append(vmx_ref)
