@@ -139,14 +139,17 @@ def find_datacenter_for_datastore(content, datastore_name):
 def download_datastore_file(host, dc_name, datastore_name, ds_path, local_path,
                             session_cookie, verify_ssl=True, progress_cb=None):
     """Download a file from a vSphere datastore. progress_cb(bytes_done, bytes_total) is optional."""
-    encoded_path = urllib.parse.quote(ds_path, safe='')
+    # Keep slashes unencoded (safe='/') — vCenter's /folder/ API requires them in the URL path.
+    encoded_path = urllib.parse.quote(ds_path, safe='/')
     url = (f"https://{host}/folder/{encoded_path}"
            f"?dcPath={urllib.parse.quote(dc_name)}&dsName={urllib.parse.quote(datastore_name)}")
     headers = {"Cookie": f"vmware_soap_session={session_cookie}"}
     print(f"Downloading {ds_path} from datastore {datastore_name} to {local_path}")
+    print(f"  URL: {url}")
     with requests.get(url, headers=headers, stream=True, verify=verify_ssl, proxies={"http": None, "https": None}) as r:
         r.raise_for_status()
         total_bytes = int(r.headers.get('Content-Length', 0))
+        print(f"  HTTP {r.status_code}, Content-Length: {total_bytes} bytes")
         done_bytes = 0
         os.makedirs(os.path.dirname(local_path), exist_ok=True)
         with open(local_path, 'wb') as f:
@@ -406,16 +409,28 @@ def _run_backup_impl(host, user, password, vm_name, dest, compress, no_verify_ss
             print('Backup completed successfully')
         finally:
             if created_snapshot:
-                snap_root = getattr(vm, 'snapshot', None)
-                if snap_root and snap_root.rootSnapshotList:
-                    snap_obj = find_snapshot_by_name(snap_root.rootSnapshotList, snap_name)
-                    if snap_obj:
-                        try:
+                try:
+                    # Re-fetch vm snapshot state to avoid stale object references
+                    content.rootFolder  # touch to keep session alive
+                    vm_fresh = None
+                    obj_view2 = content.viewManager.CreateContainerView(content.rootFolder, [vim.VirtualMachine], True)
+                    for v in obj_view2.view:
+                        if v.name == vm_name:
+                            vm_fresh = v
+                            break
+                    obj_view2.Destroy()
+                    target_vm = vm_fresh or vm
+                    snap_root = getattr(target_vm, 'snapshot', None)
+                    if snap_root and snap_root.rootSnapshotList:
+                        snap_obj = find_snapshot_by_name(snap_root.rootSnapshotList, snap_name)
+                        if snap_obj:
                             remove_snapshot(snap_obj)
-                        except Exception as e:
-                            print(f'Failed to remove snapshot: {e}', file=sys.stderr)
+                        else:
+                            print('Snapshot already removed or not found in tree')
                     else:
-                        print('Snapshot object not found in tree; may have been removed already')
+                        print('No snapshots found on VM — may have already been removed')
+                except Exception as e:
+                    print(f'Failed to remove snapshot: {e}', file=sys.stderr)
         _prog('done', 100, 'Backup finished successfully')
     finally:
         if si:
