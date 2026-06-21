@@ -391,7 +391,7 @@
   poll();
   {% elif job.status == 'finished' %}
   setProgress({ pct: 100, phase: 'done', detail: 'Backup completed successfully' });
-  {% elif job.status.startsWith('failed') %}
+  {% elif job.status.startswith('failed') %}
   setProgress({ pct: 0, phase: 'failed', detail: '{{ job.status }}' });
   {% else %}
   var pollTimer;
