@@ -314,23 +314,23 @@ def _run_backup_impl(host, user, password, vm_name, dest, compress, no_verify_ss
             if not session_cookie:
                 raise Exception('Could not extract session cookie for downloads')
 
-            vmdk_refs = vm_disk_vmdk_paths(vm)
+            # Get VMDK paths and normalize them (strip snapshot suffixes like -000001)
+            # so we always request the base VMDKs which vCenter streams as the full data disk
+            raw_vmdk_refs = vm_disk_vmdk_paths(vm)
+            vmdk_refs = [re.sub(r'-\d+\.vmdk$', '.vmdk', r, flags=re.IGNORECASE) for r in raw_vmdk_refs]
             vmx_ref   = vm_config_vmx_path(vm)
 
             # Apply disk filter — only download selected VMDKs
             if disk_filter is not None:
-                def normalize_vmdk(path):
-                    return re.sub(r'-\d+\.vmdk$', '.vmdk', path, flags=re.IGNORECASE)
-
-                disk_filter_normalized = {normalize_vmdk(f) for f in disk_filter}
-                new_vmdk_refs = []
+                disk_filter_set = {re.sub(r'-\d+\.vmdk$', '.vmdk', f, flags=re.IGNORECASE) for f in disk_filter}
                 skipped = []
-                for r in vmdk_refs:
-                    if normalize_vmdk(r) in disk_filter_normalized:
-                        new_vmdk_refs.append(r)
+                filtered_vmdk_refs = []
+                for raw_ref, norm_ref in zip(raw_vmdk_refs, vmdk_refs):
+                    if norm_ref in disk_filter_set:
+                        filtered_vmdk_refs.append(norm_ref)
                     else:
-                        skipped.append(r)
-                vmdk_refs = new_vmdk_refs
+                        skipped.append(raw_ref)
+                vmdk_refs = filtered_vmdk_refs
                 if skipped:
                     print(f"Skipping {len(skipped)} disk(s) per disk_filter: {skipped}")
                 if not vmdk_refs:
