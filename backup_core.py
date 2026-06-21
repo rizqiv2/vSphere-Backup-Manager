@@ -144,7 +144,7 @@ def download_datastore_file(host, dc_name, datastore_name, ds_path, local_path,
            f"?dcPath={urllib.parse.quote(dc_name)}&dsName={urllib.parse.quote(datastore_name)}")
     headers = {"Cookie": f"vmware_soap_session={session_cookie}"}
     print(f"Downloading {ds_path} from datastore {datastore_name} to {local_path}")
-    with requests.get(url, headers=headers, stream=True, verify=verify_ssl) as r:
+    with requests.get(url, headers=headers, stream=True, verify=verify_ssl, proxies={"http": None, "https": None}) as r:
         r.raise_for_status()
         total_bytes = int(r.headers.get('Content-Length', 0))
         done_bytes = 0
@@ -319,9 +319,18 @@ def _run_backup_impl(host, user, password, vm_name, dest, compress, no_verify_ss
 
             # Apply disk filter — only download selected VMDKs
             if disk_filter is not None:
-                disk_filter_set = set(disk_filter)
-                skipped = [r for r in vmdk_refs if r not in disk_filter_set]
-                vmdk_refs = [r for r in vmdk_refs if r in disk_filter_set]
+                def normalize_vmdk(path):
+                    return re.sub(r'-\d+\.vmdk$', '.vmdk', path, flags=re.IGNORECASE)
+
+                disk_filter_normalized = {normalize_vmdk(f) for f in disk_filter}
+                new_vmdk_refs = []
+                skipped = []
+                for r in vmdk_refs:
+                    if normalize_vmdk(r) in disk_filter_normalized:
+                        new_vmdk_refs.append(r)
+                    else:
+                        skipped.append(r)
+                vmdk_refs = new_vmdk_refs
                 if skipped:
                     print(f"Skipping {len(skipped)} disk(s) per disk_filter: {skipped}")
                 if not vmdk_refs:

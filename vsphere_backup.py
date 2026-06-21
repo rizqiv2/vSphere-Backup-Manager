@@ -101,7 +101,7 @@ def download_datastore_file(si, host, dc_name, datastore_name, ds_path, local_pa
     url = f"https://{host}/folder/{encoded_path}?dcPath={urllib.parse.quote(dc_name)}&dsName={urllib.parse.quote(datastore_name)}"
     headers = {"Cookie": f"vmware_soap_session={session_cookie}"}
     print(f"Downloading {ds_path} from datastore {datastore_name} to {local_path}")
-    with requests.get(url, headers=headers, stream=True, verify=verify_ssl) as r:
+    with requests.get(url, headers=headers, stream=True, verify=verify_ssl, proxies={"http": None, "https": None}) as r:
         r.raise_for_status()
         os.makedirs(os.path.dirname(local_path), exist_ok=True)
         with open(local_path, 'wb') as f:
