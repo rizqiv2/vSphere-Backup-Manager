@@ -70,12 +70,14 @@ def find_vm_by_name(content, vm_name):
 
 
 def wait_for_task(task, action_name='job'):
-    while task.info.state == vim.TaskInfo.State.running:
+    while task.info.state not in (vim.TaskInfo.State.success, vim.TaskInfo.State.error):
         time.sleep(1)
     if task.info.state == vim.TaskInfo.State.success:
         return task.info.result
     else:
-        raise Exception(f"{action_name} did not complete successfully: {task.info.error}")
+        err = task.info.error
+        err_msg = getattr(err, 'msg', None) or str(err)
+        raise Exception(f"{action_name} did not complete successfully: {err_msg}")
 
 
 def create_snapshot(vm, snap_name, desc="backup snapshot", memory=False, quiesce=False):
@@ -157,9 +159,20 @@ def find_snapshot_by_name(snapshots, name):
 
 def remove_snapshot(snapshot_obj):
     print("Removing snapshot")
-    task = snapshot_obj.RemoveSnapshot_Task(removeChildren=False)
-    wait_for_task(task, 'RemoveSnapshot')
-    print("Snapshot removed")
+    max_retries = 3
+    for attempt in range(max_retries):
+        try:
+            task = snapshot_obj.RemoveSnapshot_Task(removeChildren=False)
+            wait_for_task(task, 'RemoveSnapshot')
+            print("Snapshot removed")
+            return
+        except Exception as e:
+            print(f"Attempt {attempt+1} to remove snapshot failed: {e}")
+            if attempt < max_retries - 1:
+                print("Waiting 5 seconds before retrying...")
+                time.sleep(5)
+            else:
+                raise e
 
 
 def upload_via_sftp(host, user, password, key_filename, local_path, remote_dir):

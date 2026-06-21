@@ -115,12 +115,14 @@ def list_vms(host, user, password, no_verify_ssl=False):
 
 
 def wait_for_task(task, action_name='job'):
-    while task.info.state == vim.TaskInfo.State.running:
+    while task.info.state not in (vim.TaskInfo.State.success, vim.TaskInfo.State.error):
         time.sleep(1)
     if task.info.state == vim.TaskInfo.State.success:
         return task.info.result
     else:
-        raise Exception(f"{action_name} did not complete successfully: {task.info.error}")
+        err = task.info.error
+        err_msg = getattr(err, 'msg', None) or str(err)
+        raise Exception(f"{action_name} did not complete successfully: {err_msg}")
 
 
 def create_snapshot(vm, snap_name, desc="backup snapshot", memory=False, quiesce=False):
@@ -141,7 +143,7 @@ def find_datacenter_for_datastore(content, datastore_name):
 
 def download_datastore_file(host, dc_name, datastore_name, ds_path, local_path,
                             session_cookie, verify_ssl=True, progress_cb=None):
-    """Download a file from a vSphere datastore. progress_cb(bytes_done, bytes_total) is optional."""
+    """Download a file from a vSphere datastore and return its SHA-256 checksum. progress_cb(bytes_done, bytes_total) is optional."""
     # Keep slashes unencoded (safe='/') — vCenter's /folder/ API requires them in the URL path.
     encoded_path = urllib.parse.quote(ds_path, safe='/')
     url = (f"https://{host}/folder/{encoded_path}"
@@ -149,6 +151,7 @@ def download_datastore_file(host, dc_name, datastore_name, ds_path, local_path,
     headers = {"Cookie": f"vmware_soap_session={session_cookie}"}
     print(f"Downloading {ds_path} from datastore {datastore_name} to {local_path}")
     print(f"  URL: {url}")
+    sha256 = hashlib.sha256()
     with requests.get(url, headers=headers, stream=True, verify=verify_ssl, proxies={"http": None, "https": None}) as r:
         r.raise_for_status()
         total_bytes = int(r.headers.get('Content-Length', 0))
@@ -159,10 +162,12 @@ def download_datastore_file(host, dc_name, datastore_name, ds_path, local_path,
             for chunk in r.iter_content(chunk_size=4 * 1024 * 1024):
                 if chunk:
                     f.write(chunk)
+                    sha256.update(chunk)
                     done_bytes += len(chunk)
                     if progress_cb:
                         progress_cb(done_bytes, total_bytes)
     print(f"Download completed ({done_bytes // (1024*1024)} MB)")
+    return sha256.hexdigest()
 
 
 def extract_session_cookie(si):
@@ -208,9 +213,20 @@ def find_snapshot_by_name(snapshots, name):
 
 def remove_snapshot(snapshot_obj):
     print("Removing snapshot")
-    task = snapshot_obj.RemoveSnapshot_Task(removeChildren=False)
-    wait_for_task(task, 'RemoveSnapshot')
-    print("Snapshot removed")
+    max_retries = 3
+    for attempt in range(max_retries):
+        try:
+            task = snapshot_obj.RemoveSnapshot_Task(removeChildren=False)
+            wait_for_task(task, 'RemoveSnapshot')
+            print("Snapshot removed")
+            return
+        except Exception as e:
+            print(f"Attempt {attempt+1} to remove snapshot failed: {e}")
+            if attempt < max_retries - 1:
+                print("Waiting 5 seconds before retrying...")
+                time.sleep(5)
+            else:
+                raise e
 
 
 def get_file_sha256(filepath, decompress_if_zst=False):
@@ -465,7 +481,7 @@ def _run_backup_impl(host, user, password, vm_name, dest, compress, no_verify_ss
 
                 _prog('downloading', file_base_pct,
                       f'Starting file {file_idx+1}/{total_files}: {os.path.basename(ds_path)}')
-                download_datastore_file(
+                file_sha = download_datastore_file(
                     host, dc_name, ds_name, ds_path, local_file, session_cookie,
                     verify_ssl=not no_verify_ssl,
                     progress_cb=make_dl_cb(file_idx, total_files, file_base_pct,
@@ -473,13 +489,9 @@ def _run_backup_impl(host, user, password, vm_name, dest, compress, no_verify_ss
                 )
                 downloaded_files.append(local_file)
 
-                # Compute checksum immediately after download
-                _prog('downloading', file_base_pct + int(file_share * 0.95), f'Calculating checksum for {os.path.basename(ds_path)}…')
-                print(f"Calculating SHA-256 checksum for {local_file}")
-                t0 = time.time()
-                file_sha = get_file_sha256(local_file)
+                # Checksum was computed on-the-fly during download
                 file_size = os.path.getsize(local_file)
-                print(f"SHA-256: {file_sha} (size: {file_size} bytes, took {time.time() - t0:.2f}s)")
+                print(f"SHA-256 (computed on-the-fly): {file_sha} (size: {file_size} bytes)")
 
                 # Relative path from dest directory using forward slashes (e.g. "datastore1/Nakivo/Nakivo.vmdk")
                 rel_path = os.path.relpath(local_file, dest).replace(os.sep, '/')
