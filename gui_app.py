@@ -125,11 +125,17 @@ def reschedule_active_jobs():
                             run_job_thread(j)
                         return _runner
 
+                    vm_names = info.get('vm_names')
+                    if vm_names:
+                        sched_name = f"Backup {len(vm_names)} VMs ({label or jid[:8]})"
+                    else:
+                        sched_name = f"Backup {vm_name} ({label or jid[:8]})"
+
                     scheduler.add_job(
                         make_runner(jid),
                         trigger=trigger,
                         id=info['schedule_id'],
-                        name=f"Backup {vm_name} ({label or jid[:8]})",
+                        name=sched_name,
                         misfire_grace_time=3600,
                         max_instances=1,
                     )
@@ -293,10 +299,15 @@ def fmt_time(ts):
 def job_to_display(jid, info):
     """Convert internal job dict to template-friendly dict."""
     disk_filter = info.get('disk_filter')
+    vm_names = info.get('vm_names')
+    if vm_names:
+        vm_display = f"{len(vm_names)} VMs ({', '.join(vm_names[:3])}{'...' if len(vm_names) > 3 else ''})"
+    else:
+        vm_display = info.get('vm_name', '—')
     return {
         'id':            jid,
         'label':         info.get('label', ''),
-        'vm_name':       info.get('vm_name', '—'),
+        'vm_name':       vm_display,
         'status':        info.get('status', 'unknown'),
         'started_fmt':   fmt_time(info.get('started')),
         'dest':          info.get('dest', ''),
@@ -312,6 +323,7 @@ def job_to_display(jid, info):
         'retention_value': info.get('retention_value', 5),
         'monthly_day':     info.get('monthly_day'),
         'weekly_day':      info.get('weekly_day'),
+        'vm_names':        vm_names,
     }
 
 
@@ -396,44 +408,129 @@ def run_job_thread(jid):
     info['started']  = time.time()
     info['progress'] = {'pct': 0, 'phase': 'starting', 'detail': 'Initializing…'}
     
-    # Create run-specific destination folder to prevent overwrites
-    run_timestamp = datetime.fromtimestamp(info['started']).strftime('%Y%m%d%H%M%S')
-    run_dest = os.path.join(info['dest'], info['vm_name'], f"backup-{run_timestamp}")
-    info['run_dest'] = run_dest
-    
-    save_jobs_db()
-    
+    vm_names = info.get('vm_names')
     log_path = str(JOBS_DIR / jid / 'backup.log')
-
-    def progress_cb(prog):
-        info['progress'] = prog
-
-    try:
-        run_backup(
-            host=info['host'],
-            user=info['user'],
-            password=info['password'],
-            vm_name=info['vm_name'],
-            dest=run_dest,
-            compress=info.get('compress', False),
-            no_verify_ssl=info.get('no_verify_ssl', False),
-            sftp_host=info.get('sftp_host') or None,
-            sftp_user=info.get('sftp_user') or None,
-            sftp_password=info.get('sftp_password') or None,
-            sftp_key=None,
-            log_path=log_path,
-            progress_cb=progress_cb,
-            disk_filter=info.get('disk_filter'),  # None = all disks
-        )
-        info['status']   = 'finished'
-        info['progress'] = {'pct': 100, 'phase': 'done', 'detail': 'Backup completed successfully'}
+    
+    if vm_names:
+        # Grouped/Batch VM backup run
+        total_vms = len(vm_names)
+        info['run_dest'] = os.path.join(info['dest'], f"batch-{datetime.fromtimestamp(info['started']).strftime('%Y%m%d%H%M%S')}")
         save_jobs_db()
         
-        # Enforce retention policy
-        enforce_retention_policy(info, log_path=log_path)
-    except Exception as e:
-        info['status'] = f'failed ({e})'
+        success_vms = []
+        failed_vms = []
+        
+        for idx, vm in enumerate(vm_names):
+            vm_pct_start = int((idx / total_vms) * 100)
+            vm_pct_end = int(((idx + 1) / total_vms) * 100)
+            
+            def make_vm_progress_cb(vm_n, start_p, end_p, vm_idx, total):
+                def _cb(prog):
+                    prog_pct = prog.get('pct', 0)
+                    overall_pct = start_p + int((prog_pct / 100) * (end_p - start_p))
+                    info['progress'] = {
+                        'pct': overall_pct,
+                        'phase': f'vm {vm_idx+1}/{total} ({vm_n})',
+                        'detail': f"[{vm_n}] {prog.get('phase', '')}: {prog.get('detail', '')}"
+                    }
+                return _cb
+            
+            try:
+                # Log separator in log file
+                with open(log_path, 'a', encoding='utf-8') as f:
+                    f.write(f"\n{'='*50}\n")
+                    f.write(f"Starting Backup for VM {idx+1}/{total_vms}: {vm}\n")
+                    f.write(f"{'='*50}\n\n")
+                
+                # Create run-specific destination folder for this VM under the batch folder
+                run_timestamp = datetime.fromtimestamp(info['started']).strftime('%Y%m%d%H%M%S')
+                vm_dest = os.path.join(info['dest'], vm, f"backup-{run_timestamp}")
+                
+                # Resolve disk filter for this specific VM from disk_filter_map
+                disk_filter = info.get('disk_filter_map', {}).get(vm)
+                
+                run_backup(
+                    host=info['host'],
+                    user=info['user'],
+                    password=info['password'],
+                    vm_name=vm,
+                    dest=vm_dest,
+                    compress=info.get('compress', False),
+                    no_verify_ssl=info.get('no_verify_ssl', False),
+                    sftp_host=info.get('sftp_host') or None,
+                    sftp_user=info.get('sftp_user') or None,
+                    sftp_password=info.get('sftp_password') or None,
+                    sftp_key=None,
+                    log_path=log_path,
+                    progress_cb=make_vm_progress_cb(vm, vm_pct_start, vm_pct_end, idx, total_vms),
+                    disk_filter=disk_filter,
+                )
+                success_vms.append(vm)
+                
+                # Enforce retention policy for this VM
+                vm_info = {
+                    'vm_name': vm,
+                    'dest': info['dest'],
+                    'retention_type': info.get('retention_type', 'keep_all'),
+                    'retention_value': info.get('retention_value', 5)
+                }
+                enforce_retention_policy(vm_info, log_path=log_path)
+            except Exception as e:
+                failed_vms.append((vm, str(e)))
+                with open(log_path, 'a', encoding='utf-8') as f:
+                    f.write(f"\nERROR backing up VM {vm}: {e}\n\n")
+        
+        if failed_vms:
+            if success_vms:
+                info['status'] = f"finished with errors (Failed: {', '.join([f[0] for f in failed_vms])})"
+            else:
+                info['status'] = f"failed (All backups failed)"
+        else:
+            info['status'] = 'finished'
+            
+        info['progress'] = {
+            'pct': 100,
+            'phase': 'done',
+            'detail': f"Batch completed. Success: {len(success_vms)}, Failed: {len(failed_vms)}"
+        }
         save_jobs_db()
+        
+    else:
+        # Single VM backup run (original behavior)
+        run_timestamp = datetime.fromtimestamp(info['started']).strftime('%Y%m%d%H%M%S')
+        run_dest = os.path.join(info['dest'], info['vm_name'], f"backup-{run_timestamp}")
+        info['run_dest'] = run_dest
+        save_jobs_db()
+
+        def progress_cb(prog):
+            info['progress'] = prog
+
+        try:
+            run_backup(
+                host=info['host'],
+                user=info['user'],
+                password=info['password'],
+                vm_name=info['vm_name'],
+                dest=run_dest,
+                compress=info.get('compress', False),
+                no_verify_ssl=info.get('no_verify_ssl', False),
+                sftp_host=info.get('sftp_host') or None,
+                sftp_user=info.get('sftp_user') or None,
+                sftp_password=info.get('sftp_password') or None,
+                sftp_key=None,
+                log_path=log_path,
+                progress_cb=progress_cb,
+                disk_filter=info.get('disk_filter'),  # None = all disks
+            )
+            info['status']   = 'finished'
+            info['progress'] = {'pct': 100, 'phase': 'done', 'detail': 'Backup completed successfully'}
+            save_jobs_db()
+            
+            # Enforce retention policy
+            enforce_retention_policy(info, log_path=log_path)
+        except Exception as e:
+            info['status'] = f'failed ({e})'
+            save_jobs_db()
 
 
 def create_and_start_job(
@@ -441,7 +538,8 @@ def create_and_start_job(
     sftp_host, sftp_user, sftp_password,
     schedule_type, schedule_time, weekly_day, interval_hours,
     label='', disk_filter=None, monthly_day=1,
-    retention_type='keep_all', retention_value=5
+    retention_type='keep_all', retention_value=5,
+    vm_names=None, disk_filter_map=None
 ):
     """Create a job entry and either run immediately or register schedule.
     disk_filter: list of VMDK path strings to include, or None for all.
@@ -458,6 +556,8 @@ def create_and_start_job(
         'user':          session['user'],
         'password':      session['password'],
         'vm_name':       vm_name,
+        'vm_names':      vm_names,
+        'disk_filter_map': disk_filter_map,
         'dest':          dest,
         'compress':      compress,
         'no_verify_ssl': no_verify_ssl,
@@ -512,11 +612,16 @@ def create_and_start_job(
                     run_job_thread(j)
                 return _runner
 
+            if vm_names:
+                sched_name = f"Backup {len(vm_names)} VMs ({label or jid[:8]})"
+            else:
+                sched_name = f"Backup {vm_name} ({label or jid[:8]})"
+
             sched_job = scheduler.add_job(
                 make_runner(jid),
                 trigger=trigger,
                 id=f'backup-{jid}',
-                name=f'Backup {vm_name} ({label or jid[:8]})',
+                name=sched_name,
                 misfire_grace_time=3600,
                 max_instances=1,
             )
@@ -770,9 +875,8 @@ def batch_jobs():
             flash('No VMs selected.', 'danger')
             return redirect(url_for('vms'))
 
-        created = []
+        disk_filter_map = {}
         for vm_name in vm_names:
-            # Resolve disk_filter from strategy
             if disk_strategy == 'os':
                 vm_info = vms_by_name.get(vm_name, {})
                 disks = sorted(vm_info.get('disks', []), key=lambda d: d.get('size_gb', 0))
@@ -781,38 +885,40 @@ def batch_jobs():
                 disk_filter = []
             else:
                 disk_filter = None
+            disk_filter_map[vm_name] = disk_filter
 
-            label = f'{label_prefix} — {vm_name}' if label_prefix else vm_name
+        retention_type = request.form.get('retention_type', 'keep_all')
+        try:
+            retention_value = int(request.form.get('retention_value', '5'))
+        except ValueError:
+            retention_value = 5
 
-            retention_type = request.form.get('retention_type', 'keep_all')
-            try:
-                retention_value = int(request.form.get('retention_value', '5'))
-            except ValueError:
-                retention_value = 5
+        label = label_prefix if label_prefix else f"Batch Backup — {len(vm_names)} VMs"
 
-            jid = create_and_start_job(
-                vm_name=vm_name,
-                dest=dest,
-                compress=compress,
-                no_verify_ssl=no_verify_ssl,
-                sftp_host=None,
-                sftp_user=None,
-                sftp_password=None,
-                schedule_type=schedule_type,
-                schedule_time=sched_time,
-                weekly_day=weekly_day,
-                interval_hours=interval_hrs,
-                label=label,
-                disk_filter=disk_filter,
-                monthly_day=monthly_day,
-                retention_type=retention_type,
-                retention_value=retention_value,
-            )
-            created.append(jid)
+        jid = create_and_start_job(
+            vm_name=None,
+            dest=dest,
+            compress=compress,
+            no_verify_ssl=no_verify_ssl,
+            sftp_host=None,
+            sftp_user=None,
+            sftp_password=None,
+            schedule_type=schedule_type,
+            schedule_time=sched_time,
+            weekly_day=weekly_day,
+            interval_hours=interval_hrs,
+            label=label,
+            disk_filter=None,
+            monthly_day=monthly_day,
+            retention_type=retention_type,
+            retention_value=retention_value,
+            vm_names=vm_names,
+            disk_filter_map=disk_filter_map,
+        )
 
         strat_label = {'all': 'all disks', 'os': 'OS disk only', 'vmx': 'VMX config only'}.get(disk_strategy, disk_strategy)
-        flash(f'{len(created)} backup job{"s" if len(created)!=1 else ""} created ({strat_label}).', 'success')
-        return redirect(url_for('jobs'))
+        flash(f'Batch backup job created for {len(vm_names)} VMs ({strat_label}).', 'success')
+        return redirect(url_for('list_jobs'))
 
 
     # GET: show batch config form

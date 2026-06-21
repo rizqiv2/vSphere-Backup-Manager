@@ -161,9 +161,19 @@
 <div class="content">
 
   <div class="detail-grid">
-    <div class="detail-item">
-      <div class="detail-item-label">Virtual Machine</div>
-      <div class="detail-item-val">{{ job.vm_name }}</div>
+    <div class="detail-item" {% if job.vm_names %}style="grid-column: span 2;"{% endif %}>
+      <div class="detail-item-label">Virtual Machine{% if job.vm_names %}s{% endif %}</div>
+      <div class="detail-item-val">
+        {% if job.vm_names %}
+          <div style="display: flex; flex-wrap: wrap; gap: 8px; margin-top: 6px;">
+            {% for vm in job.vm_names %}
+              <span class="badge badge-gray" style="font-family: 'JetBrains Mono', monospace; font-size: 12px; padding: 4px 10px;">{{ vm }}</span>
+            {% endfor %}
+          </div>
+        {% else %}
+          {{ job.vm_name }}
+        {% endif %}
+      </div>
     </div>
     <div class="detail-item">
       <div class="detail-item-label">Status</div>

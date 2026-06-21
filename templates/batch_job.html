@@ -142,7 +142,7 @@
     <!-- Preview info banner -->
     <div class="jobs-preview">
       <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="vertical-align:middle; margin-right:6px; color:var(--accent);"><circle cx="12" cy="12" r="10"/><line x1="12" y1="16" x2="12" y2="12"/><line x1="12" y1="8" x2="12.01" y2="8"/></svg>
-      This will create <strong>{{ vm_names|length }} independent backup job{{ 's' if vm_names|length != 1 }}</strong>, each running in parallel with its own progress and log.
+      This will create a <strong>single grouped backup job</strong> for all <strong>{{ vm_names|length }} selected VMs</strong>. The backups will execute sequentially to prevent datastore I/O congestion, updating a single progress bar and log.
     </div>
 
     <!-- VM list -->
@@ -445,7 +445,7 @@
         <button type="submit" id="submitBtn" class="btn btn-primary">
           <span id="submitText">
             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" style="margin-right:6px;"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/></svg>
-            Launch {{ vm_names|length }} Backup{{ 's' if vm_names|length != 1 }}
+            Launch Grouped Backup ({{ vm_names|length }} VMs)
           </span>
           <span id="submitSpinner" class="spinner" style="display:none;"></span>
         </button>
