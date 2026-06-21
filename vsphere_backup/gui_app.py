@@ -503,6 +503,81 @@ def create_job():
     )
 
 
+# ── Batch Jobs ────────────────────────────────────────────────────────────────
+
+@app.route('/jobs/batch', methods=['GET', 'POST'])
+@login_required
+def batch_jobs():
+    vm_list, _, _ = get_cached_vms(
+        session['host'], session['user'], session['password'],
+        no_verify_ssl=session.get('no_verify_ssl', False)
+    )
+    vms_by_name = {v['name']: v for v in vm_list}
+
+    if request.method == 'POST':
+        vm_names      = request.form.getlist('vms')
+        dest          = request.form.get('dest', './backups').strip()
+        compress      = 'compress' in request.form
+        no_verify_ssl = session.get('no_verify_ssl', False)
+        disk_strategy = request.form.get('disk_strategy', 'all')
+        schedule_type = request.form.get('schedule_type', 'now')
+        daily_time    = request.form.get('daily_time', '02:00')
+        label_prefix  = request.form.get('job_label', '').strip()
+        sched_time    = daily_time if schedule_type == 'daily' else ''
+
+        if not vm_names:
+            flash('No VMs selected.', 'danger')
+            return redirect(url_for('vms'))
+
+        created = []
+        for vm_name in vm_names:
+            # Resolve disk_filter from strategy
+            if disk_strategy == 'os':
+                # Smallest disk = OS disk
+                vm_info = vms_by_name.get(vm_name, {})
+                disks = sorted(vm_info.get('disks', []), key=lambda d: d.get('size_gb', 0))
+                disk_filter = [disks[0]['path']] if disks else None
+            elif disk_strategy == 'vmx':
+                disk_filter = []   # empty list = VMX only
+            else:
+                disk_filter = None  # all disks
+
+            label = f'{label_prefix} — {vm_name}' if label_prefix else vm_name
+
+            jid = create_and_start_job(
+                vm_name=vm_name,
+                dest=dest,
+                compress=compress,
+                no_verify_ssl=no_verify_ssl,
+                sftp_host=None,
+                sftp_user=None,
+                sftp_password=None,
+                schedule_type=schedule_type,
+                schedule_time=sched_time,
+                weekly_day='0',
+                interval_hours='24',
+                label=label,
+                disk_filter=disk_filter,
+            )
+            created.append(jid)
+
+        strat_label = {'all': 'all disks', 'os': 'OS disk only', 'vmx': 'VMX config only'}.get(disk_strategy, disk_strategy)
+        flash(f'{len(created)} backup job{"s" if len(created)!=1 else ""} created ({strat_label}).', 'success')
+        return redirect(url_for('jobs'))
+
+    # GET: show batch config form
+    vm_names = request.args.getlist('vms')
+    if not vm_names:
+        flash('No VMs specified for batch backup.', 'danger')
+        return redirect(url_for('vms'))
+
+    return render_template(
+        'batch_job.html',
+        vm_names=vm_names,
+        vms_by_name=vms_by_name,
+    )
+
+
 # ── Jobs Dashboard ────────────────────────────────────────────────────────────
 
 @app.route('/jobs')

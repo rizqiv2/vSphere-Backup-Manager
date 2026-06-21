@@ -1,0 +1,371 @@
+{% extends "base.html" %}
+{% set active_page = 'vms' %}
+{% block title %}Batch Backup — vSphere Backup Manager{% endblock %}
+
+{% block head %}
+<style>
+  .batch-wrap { max-width: 760px; }
+
+  .vm-list-card {
+    background: var(--bg-card);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    margin-bottom: 20px;
+    overflow: hidden;
+    box-shadow: var(--shadow);
+    backdrop-filter: blur(8px);
+  }
+  .vm-list-header {
+    padding: 14px 22px;
+    border-bottom: 1px solid var(--border);
+    display: flex; align-items: center; justify-content: space-between;
+    background: rgba(255,255,255,0.01);
+    font-size: 14.5px; font-weight: 700;
+  }
+  .vm-list-item {
+    display: flex; align-items: center; gap: 14px;
+    padding: 13px 22px;
+    border-bottom: 1px solid var(--border);
+  }
+  .vm-list-item:last-child { border-bottom: none; }
+  .vm-list-num {
+    width: 22px; height: 22px; border-radius: 50%;
+    background: rgba(99,102,241,0.12);
+    border: 1px solid rgba(99,102,241,0.25);
+    font-size: 11px; font-weight: 700; color: var(--accent);
+    display: flex; align-items: center; justify-content: center;
+    flex-shrink: 0;
+  }
+  .vm-list-name { font-weight: 600; font-size: 14px; flex: 1; }
+  .vm-list-state { font-size: 12px; color: var(--text-muted); }
+
+  .section-card {
+    background: var(--bg-card);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    margin-bottom: 20px;
+    overflow: hidden;
+    box-shadow: var(--shadow);
+    backdrop-filter: blur(8px);
+  }
+  .section-card-header {
+    padding: 14px 22px;
+    border-bottom: 1px solid var(--border);
+    background: rgba(255,255,255,0.01);
+    display: flex; align-items: center; gap: 10px;
+    font-size: 14.5px; font-weight: 700;
+  }
+  .section-card-body { padding: 22px; }
+
+  .disk-strategy-grid {
+    display: grid; grid-template-columns: 1fr 1fr 1fr;
+    gap: 12px;
+  }
+  .strategy-opt {
+    border: 1.5px solid var(--border);
+    border-radius: var(--radius-sm);
+    padding: 14px 16px;
+    cursor: pointer;
+    transition: all 0.2s ease;
+    text-align: center;
+    background: rgba(255,255,255,0.01);
+  }
+  .strategy-opt:hover { border-color: var(--border-bright); transform: translateY(-1px); }
+  .strategy-opt.selected { border-color: var(--accent); background: rgba(99,102,241,0.08); box-shadow: 0 4px 12px rgba(99,102,241,0.08); }
+  .strategy-opt input[type=radio] { display: none; }
+  .strategy-icon { font-size: 24px; margin-bottom: 8px; }
+  .strategy-title { font-size: 13px; font-weight: 700; }
+  .strategy-desc { font-size: 11.5px; color: var(--text-muted); margin-top: 3px; }
+
+  .schedule-options {
+    display: grid; grid-template-columns: repeat(2, 1fr);
+    gap: 10px; margin-bottom: 16px;
+  }
+  .schedule-opt {
+    border: 1.5px solid var(--border);
+    border-radius: var(--radius-sm);
+    padding: 14px 16px;
+    cursor: pointer;
+    transition: all 0.2s ease;
+    display: flex; align-items: flex-start; gap: 10px;
+    background: rgba(255,255,255,0.01);
+  }
+  .schedule-opt:hover { border-color: var(--border-bright); transform: translateY(-1px); }
+  .schedule-opt.selected { border-color: var(--accent); background: rgba(99,102,241,0.08); }
+  .schedule-opt input[type=radio] { display: none; }
+  .schedule-opt-icon { height: 22px; display: flex; align-items: center; }
+  .schedule-opt-title { font-size: 13.5px; font-weight: 700; }
+  .schedule-opt-desc { font-size: 12px; color: var(--text-muted); margin-top: 3px; }
+  .schedule-detail { display: none; margin-top: 14px; }
+  .schedule-detail.visible { display: block; }
+  .form-row { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
+
+  .action-bar { display: flex; gap: 12px; align-items: center; padding: 20px 0 40px; }
+
+  .jobs-preview {
+    background: rgba(99,102,241,0.05);
+    border: 1px solid rgba(99,102,241,0.15);
+    border-radius: var(--radius-sm);
+    padding: 12px 16px;
+    font-size: 13px;
+    color: var(--text-secondary);
+    margin-bottom: 20px;
+  }
+</style>
+{% endblock %}
+
+{% block content %}
+<div class="topbar">
+  <div>
+    <div class="topbar-title">Batch Backup</div>
+    <div class="topbar-subtitle">Configure and launch backups for {{ vm_names|length }} VMs simultaneously</div>
+  </div>
+  <div class="topbar-actions">
+    <a href="/vms" class="btn btn-ghost btn-sm">
+      <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" style="margin-right:6px;"><line x1="19" y1="12" x2="5" y2="12"/><polyline points="12 19 5 12 12 5"/></svg>
+      Back to VMs
+    </a>
+  </div>
+</div>
+
+<div class="content">
+  <div class="batch-wrap">
+
+    {% with messages = get_flashed_messages(with_categories=true) %}
+    {% if messages %}
+      {% for cat, msg in messages %}
+      <div class="alert alert-{{ cat }}">{{ msg }}</div>
+      {% endfor %}
+    {% endif %}
+    {% endwith %}
+
+    <!-- Preview info banner -->
+    <div class="jobs-preview">
+      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="vertical-align:middle; margin-right:6px; color:var(--accent);"><circle cx="12" cy="12" r="10"/><line x1="12" y1="16" x2="12" y2="12"/><line x1="12" y1="8" x2="12.01" y2="8"/></svg>
+      This will create <strong>{{ vm_names|length }} independent backup job{{ 's' if vm_names|length != 1 }}</strong>, each running in parallel with its own progress and log.
+    </div>
+
+    <!-- VM list -->
+    <div class="vm-list-card">
+      <div class="vm-list-header">
+        <div>
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="vertical-align:middle; margin-right:6px;"><rect x="2" y="3" width="20" height="14" rx="2" ry="2"/><line x1="8" y1="21" x2="16" y2="21"/><line x1="12" y1="17" x2="12" y2="21"/></svg>
+          Selected VMs ({{ vm_names|length }})
+        </div>
+        <a href="/vms" style="font-size:12px;color:var(--text-muted);text-decoration:none;">Change selection</a>
+      </div>
+      {% for name in vm_names %}
+      {% set vm = vms_by_name.get(name, {}) %}
+      <div class="vm-list-item">
+        <div class="vm-list-num">{{ loop.index }}</div>
+        <div style="flex:1;">
+          <div class="vm-list-name">{{ name }}</div>
+          <div class="vm-list-state">{{ vm.get('guest_os','') or '' }}</div>
+        </div>
+        {% if vm.get('power_state') == 'poweredOn' %}
+          <span class="badge badge-green">On</span>
+        {% elif vm.get('power_state') == 'poweredOff' %}
+          <span class="badge badge-red">Off</span>
+        {% else %}
+          <span class="badge badge-gray">{{ vm.get('power_state','—') }}</span>
+        {% endif %}
+        {% if vm.get('disks') %}
+        <span style="font-size:12px;color:var(--text-muted);">{{ vm.disks|length }} disk{{ 's' if vm.disks|length != 1 }}</span>
+        {% endif %}
+      </div>
+      {% endfor %}
+    </div>
+
+    <form method="post" action="/jobs/batch" id="batchForm">
+      <!-- Pass VM names through form -->
+      {% for name in vm_names %}
+      <input type="hidden" name="vms" value="{{ name }}" />
+      {% endfor %}
+
+      <!-- Destination -->
+      <div class="section-card">
+        <div class="section-card-header">
+          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg>
+          Destination
+        </div>
+        <div class="section-card-body">
+          <!-- NFS quick-select -->
+          <div id="nfsTargets" style="margin-bottom:14px; display:none;">
+            <div class="form-label" style="margin-bottom:6px;">
+              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="vertical-align:middle;margin-right:4px;"><rect x="2" y="2" width="20" height="8" rx="2" ry="2"/><rect x="2" y="14" width="20" height="8" rx="2" ry="2"/><line x1="6" y1="6" x2="6.01" y2="6"/><line x1="6" y1="18" x2="6.01" y2="18"/></svg>
+              NFS Mounts (click to use)
+            </div>
+            <div id="nfsMountList" style="display:flex; gap:8px; flex-wrap:wrap;"></div>
+          </div>
+
+          <div class="form-group">
+            <label class="form-label" for="dest">Base backup path</label>
+            <input id="dest" class="form-control" type="text" name="dest"
+                   value="./backups" placeholder="e.g. /mnt/nfs-backup or /data/vmbackups" required />
+            <div style="font-size:12px;color:var(--text-muted);margin-top:6px;">
+              Each VM will be backed up into its own subfolder: <code style="font-family:'JetBrains Mono',monospace;">dest/VM_NAME/</code>
+            </div>
+          </div>
+          <div class="form-check">
+            <input type="checkbox" id="compress" name="compress" />
+            <label for="compress">Compress with zstd (smaller files, slower)</label>
+          </div>
+        </div>
+      </div>
+
+      <!-- Disk Strategy -->
+      <div class="section-card">
+        <div class="section-card-header">
+          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="2" width="20" height="20" rx="2" ry="2"/><path d="M12 18h.01"/><path d="M8 6h8"/><path d="M8 10h8"/></svg>
+          Disk Strategy
+        </div>
+        <div class="section-card-body">
+          <div class="disk-strategy-grid">
+            <label class="strategy-opt selected" id="strat-all" onclick="selectStrategy('all')">
+              <input type="radio" name="disk_strategy" value="all" checked />
+              <div class="strategy-icon">
+                <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="color:var(--accent);"><rect x="2" y="2" width="20" height="20" rx="2"/><path d="M8 6h8"/><path d="M8 10h8"/><path d="M8 14h4"/></svg>
+              </div>
+              <div class="strategy-title">All Disks</div>
+              <div class="strategy-desc">Back up every VMDK attached</div>
+            </label>
+            <label class="strategy-opt" id="strat-os" onclick="selectStrategy('os')">
+              <input type="radio" name="disk_strategy" value="os" />
+              <div class="strategy-icon">
+                <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="color:var(--success);"><rect x="2" y="3" width="20" height="14" rx="2" ry="2"/><line x1="8" y1="21" x2="16" y2="21"/><line x1="12" y1="17" x2="12" y2="21"/></svg>
+              </div>
+              <div class="strategy-title">OS Disk Only</div>
+              <div class="strategy-desc">Smallest disk per VM<br><span style="color:var(--success);font-weight:600;">Best for ipcam VMs</span></div>
+            </label>
+            <label class="strategy-opt" id="strat-vmx" onclick="selectStrategy('vmx')">
+              <input type="radio" name="disk_strategy" value="vmx" />
+              <div class="strategy-icon">
+                <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="color:var(--text-muted);"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>
+              </div>
+              <div class="strategy-title">Config Only</div>
+              <div class="strategy-desc">VMX file only, no disk data</div>
+            </label>
+          </div>
+          <div style="margin-top:12px;padding:10px 14px;background:rgba(6,182,212,0.06);border:1px solid rgba(6,182,212,0.15);border-radius:var(--radius-sm);font-size:12.5px;color:var(--text-secondary);" id="stratHint">
+            All VMDK disks will be backed up for each VM.
+          </div>
+        </div>
+      </div>
+
+      <!-- Schedule -->
+      <div class="section-card">
+        <div class="section-card-header">
+          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
+          Schedule
+        </div>
+        <div class="section-card-body">
+          <div class="schedule-options">
+            <label class="schedule-opt selected" id="opt-now" onclick="selectSchedule('now')">
+              <input type="radio" name="schedule_type" value="now" checked />
+              <div>
+                <div class="schedule-opt-icon">
+                  <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="color:var(--accent);"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/></svg>
+                </div>
+                <div class="schedule-opt-title">Run Now</div>
+                <div class="schedule-opt-desc">Start all backups immediately</div>
+              </div>
+            </label>
+            <label class="schedule-opt" id="opt-daily" onclick="selectSchedule('daily')">
+              <input type="radio" name="schedule_type" value="daily" />
+              <div>
+                <div class="schedule-opt-icon">
+                  <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="color:var(--accent);"><rect x="3" y="4" width="18" height="18" rx="2" ry="2"/><line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="3" y1="10" x2="21" y2="10"/></svg>
+                </div>
+                <div class="schedule-opt-title">Daily</div>
+                <div class="schedule-opt-desc">All VMs at the same time each day</div>
+              </div>
+            </label>
+          </div>
+          <div class="schedule-detail" id="detail-daily">
+            <div class="form-row">
+              <div class="form-group" style="margin:0;">
+                <label class="form-label" for="daily_time">Time (24h)</label>
+                <input id="daily_time" class="form-control" type="time" name="daily_time" value="02:00" />
+              </div>
+            </div>
+          </div>
+          <div class="form-group" style="margin-top:16px; margin-bottom:0;">
+            <label class="form-label" for="job_label">Label prefix (optional)</label>
+            <input id="job_label" class="form-control" type="text" name="job_label"
+                   placeholder="e.g. Nightly ipcam backup" />
+          </div>
+        </div>
+      </div>
+
+      <div class="action-bar">
+        <button type="submit" id="submitBtn" class="btn btn-primary">
+          <span id="submitText">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" style="margin-right:6px;"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/></svg>
+            Launch {{ vm_names|length }} Backup{{ 's' if vm_names|length != 1 }}
+          </span>
+          <span id="submitSpinner" class="spinner" style="display:none;"></span>
+        </button>
+        <a href="/vms" class="btn btn-ghost">Cancel</a>
+      </div>
+    </form>
+
+  </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+  function selectSchedule(type) {
+    ['now','daily'].forEach(t => {
+      document.getElementById('opt-' + t).classList.remove('selected');
+      const d = document.getElementById('detail-' + t);
+      if (d) d.classList.remove('visible');
+    });
+    document.getElementById('opt-' + type).classList.add('selected');
+    document.getElementById('opt-' + type).querySelector('input').checked = true;
+    const detail = document.getElementById('detail-' + type);
+    if (detail) detail.classList.add('visible');
+  }
+
+  const stratHints = {
+    all:  'All VMDK disks will be backed up for each VM.',
+    os:   'Only the smallest disk per VM (OS disk) will be backed up — ideal for ipcam/DVR VMs with large video storage.',
+    vmx:  'Only the VM configuration file (.vmx) will be saved — no disk data.',
+  };
+  function selectStrategy(type) {
+    ['all','os','vmx'].forEach(t => document.getElementById('strat-' + t).classList.remove('selected'));
+    document.getElementById('strat-' + type).classList.add('selected');
+    document.getElementById('strat-' + type).querySelector('input').checked = true;
+    document.getElementById('stratHint').textContent = stratHints[type];
+  }
+
+  document.getElementById('batchForm').addEventListener('submit', function() {
+    document.getElementById('submitText').style.display = 'none';
+    document.getElementById('submitSpinner').style.display = 'inline-block';
+    document.getElementById('submitBtn').disabled = true;
+  });
+
+  // Load NFS mounts
+  fetch('/api/nfs')
+    .then(r => r.json())
+    .then(mounts => {
+      if (!mounts || !mounts.length) return;
+      const wrap = document.getElementById('nfsTargets');
+      const list = document.getElementById('nfsMountList');
+      mounts.forEach(m => {
+        const btn = document.createElement('button');
+        btn.type = 'button';
+        btn.className = 'btn btn-secondary btn-sm';
+        btn.innerHTML = `<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="margin-right:4px;"><rect x="2" y="2" width="20" height="8" rx="2" ry="2"/><rect x="2" y="14" width="20" height="8" rx="2" ry="2"/><line x1="6" y1="6" x2="6.01" y2="6"/><line x1="6" y1="18" x2="6.01" y2="18"/></svg> ${m.mountpoint} <span style="color:var(--text-muted);font-size:11px;margin-left:4px;">${m.free_gb}GB free</span>`;
+        btn.onclick = () => {
+          document.getElementById('dest').value = m.mountpoint;
+          list.querySelectorAll('button').forEach(b => b.style.borderColor = '');
+          btn.style.borderColor = 'var(--accent)';
+        };
+        list.appendChild(btn);
+      });
+      wrap.style.display = '';
+    })
+    .catch(() => {});
+</script>
+{% endblock %}

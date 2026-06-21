@@ -36,6 +36,67 @@
   }
   .vm-card:hover::before { opacity: 1; }
 
+  /* ── Batch selection mode ── */
+  .vm-card.selectable { cursor: pointer; user-select: none; }
+  .vm-card.selected {
+    border-color: var(--accent) !important;
+    background: rgba(99,102,241,0.07);
+    transform: translateY(-2px) scale(1.005) !important;
+    box-shadow: 0 0 0 2px rgba(99,102,241,0.2), var(--shadow) !important;
+  }
+  .vm-card.selected::before { opacity: 1; }
+
+  .vm-check {
+    display: none;
+    position: absolute; top: 14px; right: 14px;
+    width: 22px; height: 22px;
+    border: 2px solid rgba(255,255,255,0.15);
+    border-radius: 6px;
+    background: rgba(8,10,16,0.6);
+    align-items: center; justify-content: center;
+    transition: all 0.15s ease;
+    z-index: 10;
+    flex-shrink: 0;
+  }
+  .vm-card.selectable .vm-check { display: flex; }
+  .vm-card.selected .vm-check {
+    background: var(--accent);
+    border-color: var(--accent);
+    box-shadow: 0 0 8px rgba(99,102,241,0.4);
+  }
+  .vm-check svg { opacity: 0; transition: opacity 0.15s; }
+  .vm-card.selected .vm-check svg { opacity: 1; }
+
+  /* ── Floating batch bar ── */
+  .batch-bar {
+    position: fixed; bottom: 0; left: var(--sidebar-w); right: 0;
+    background: rgba(10, 12, 20, 0.96);
+    backdrop-filter: blur(24px);
+    border-top: 1px solid rgba(99,102,241,0.25);
+    padding: 14px 40px;
+    display: flex; align-items: center; justify-content: space-between;
+    gap: 16px;
+    transform: translateY(100%);
+    transition: transform 0.35s cubic-bezier(0.4, 0, 0.2, 1);
+    z-index: 200;
+    box-shadow: 0 -12px 40px rgba(0,0,0,0.5);
+  }
+  .batch-bar.visible { transform: translateY(0); }
+  .batch-bar-info { display: flex; align-items: center; gap: 14px; }
+  .batch-count {
+    font-size: 24px; font-weight: 800; color: var(--accent);
+    letter-spacing: -0.03em; min-width: 2ch; text-align: right;
+  }
+  .batch-divider { width: 1px; height: 32px; background: var(--border); }
+  .batch-label { font-size: 14px; color: var(--text-secondary); font-weight: 500; }
+  .batch-vm-list {
+    font-size: 12px; color: var(--text-muted);
+    font-family: 'JetBrains Mono', monospace;
+    max-width: 400px;
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  }
+  .batch-actions { display: flex; align-items: center; gap: 10px; }
+
   .vm-card-header {
     display: flex; align-items: flex-start; justify-content: space-between;
     margin-bottom: 18px;
@@ -144,6 +205,10 @@
       <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" style="margin-right: 6px;"><path d="M23 4v6h-6"/><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"/></svg>
       Refresh
     </a>
+    <button id="selectModeBtn" class="btn btn-secondary btn-sm" onclick="toggleSelectMode()">
+      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" style="margin-right:6px;"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/></svg>
+      Select VMs
+    </button>
     <a href="/jobs/create" class="btn btn-primary btn-sm">
       <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" style="margin-right: 6px;"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
       Create Job
@@ -202,7 +267,14 @@
     {% for vm in vms %}
     <div class="vm-card"
          data-name="{{ vm.name|lower }}"
-         data-power="{{ vm.power_state }}">
+         data-vmname="{{ vm.name }}"
+         data-power="{{ vm.power_state }}"
+         onclick="handleCardClick(this, event)">
+
+      <!-- Selection checkbox overlay -->
+      <div class="vm-check">
+        <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="#ffffff" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>
+      </div>
 
       <div class="vm-card-header">
         <div>
@@ -246,14 +318,14 @@
       </div>
       {% endif %}
 
-      <div class="vm-footer">
+      <div class="vm-footer" id="footer-{{ loop.index }}">
         <a href="/jobs/create?vm={{ vm.name|urlencode }}"
-           class="btn btn-primary btn-sm">
+           class="btn btn-primary btn-sm" onclick="event.stopPropagation()">
           <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/></svg>
           Backup Now
         </a>
         <a href="/jobs/create?vm={{ vm.name|urlencode }}&schedule=1"
-           class="btn btn-secondary btn-sm">
+           class="btn btn-secondary btn-sm" onclick="event.stopPropagation()">
           <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
           Schedule
         </a>
@@ -269,11 +341,34 @@
     {% endfor %}
   </div>
 </div>
+
+<!-- ── Floating Batch Action Bar ── -->
+<div class="batch-bar" id="batchBar">
+  <div class="batch-bar-info">
+    <div class="batch-count" id="batchCount">0</div>
+    <div class="batch-divider"></div>
+    <div>
+      <div class="batch-label">VMs selected</div>
+      <div class="batch-vm-list" id="batchVmList"></div>
+    </div>
+  </div>
+  <div class="batch-actions">
+    <button class="btn btn-ghost btn-sm" onclick="selectAllVisible()">Select All</button>
+    <button class="btn btn-ghost btn-sm" onclick="clearSelection()">Clear</button>
+    <button class="btn btn-primary" onclick="batchBackup()">
+      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" style="margin-right:6px;"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/></svg>
+      Backup <span id="batchCountBtn">0</span> VMs
+    </button>
+  </div>
+</div>
+
 {% endblock %}
 
 {% block scripts %}
 <script>
   let activeFilter = 'all';
+  let selectMode   = false;
+  let selected     = new Set();
 
   function setFilter(filter) {
     activeFilter = filter;
@@ -289,6 +384,72 @@
       const matchSearch = card.dataset.name.includes(q);
       card.style.display = (matchFilter && matchSearch) ? '' : 'none';
     });
+  }
+
+  // ── Batch selection ──────────────────────────────────────────────────────────
+  function toggleSelectMode() {
+    selectMode = !selectMode;
+    const btn = document.getElementById('selectModeBtn');
+
+    if (selectMode) {
+      btn.style.background = 'rgba(99,102,241,0.15)';
+      btn.style.borderColor = 'var(--accent)';
+      btn.style.color = '#a5b4fc';
+    } else {
+      btn.style.background = '';
+      btn.style.borderColor = '';
+      btn.style.color = '';
+      clearSelection();
+    }
+
+    document.querySelectorAll('.vm-card').forEach(card => {
+      card.classList.toggle('selectable', selectMode);
+    });
+  }
+
+  function handleCardClick(card, e) {
+    if (!selectMode) return;
+    const vmName = card.dataset.vmname;
+    if (selected.has(vmName)) {
+      selected.delete(vmName);
+      card.classList.remove('selected');
+    } else {
+      selected.add(vmName);
+      card.classList.add('selected');
+    }
+    updateBatchBar();
+  }
+
+  function selectAllVisible() {
+    document.querySelectorAll('.vm-card').forEach(card => {
+      if (card.style.display === 'none') return;
+      const vmName = card.dataset.vmname;
+      selected.add(vmName);
+      card.classList.add('selected');
+    });
+    updateBatchBar();
+  }
+
+  function clearSelection() {
+    selected.clear();
+    document.querySelectorAll('.vm-card').forEach(c => c.classList.remove('selected'));
+    updateBatchBar();
+  }
+
+  function updateBatchBar() {
+    const n = selected.size;
+    document.getElementById('batchCount').textContent = n;
+    document.getElementById('batchCountBtn').textContent = n;
+    const names = [...selected].join(', ');
+    document.getElementById('batchVmList').textContent = names;
+    document.getElementById('batchBar').classList.toggle('visible', n > 0);
+  }
+
+  function batchBackup() {
+    if (!selected.size) return;
+    const params = new URLSearchParams();
+    selected.forEach(vm => params.append('vms', vm));
+    window.location.href = '/jobs/batch?' + params.toString();
   }
 </script>
 {% endblock %}
