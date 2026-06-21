@@ -285,6 +285,17 @@
               </div>
             </label>
 
+            <label class="schedule-opt" id="opt-monthly" onclick="selectSchedule('monthly')">
+              <input type="radio" name="schedule_type" value="monthly" />
+              <div>
+                <div class="schedule-opt-icon" style="height: 22px; display: flex; align-items: center;">
+                  <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="color:var(--accent);"><rect x="3" y="4" width="18" height="18" rx="2" ry="2"/><line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="3" y1="10" x2="21" y2="10"/><path d="M8 14h4"/><path d="M8 18h2"/></svg>
+                </div>
+                <div class="schedule-opt-title">Monthly</div>
+                <div class="schedule-opt-desc">Specific day each month</div>
+              </div>
+            </label>
+
           </div>
 
           <!-- Daily detail -->
@@ -326,6 +337,24 @@
                 <label class="form-label" for="interval_hours">Every (hours)</label>
                 <input id="interval_hours" class="form-control" type="number"
                        name="interval_hours" value="24" min="1" max="8760" />
+                <div style="font-size:12px;color:var(--text-muted);margin-top:4px;">
+                  e.g. 6 = every 6h &middot; 12 = twice daily &middot; 168 = weekly
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <!-- Monthly detail -->
+          <div class="schedule-detail" id="detail-monthly">
+            <div class="form-row">
+              <div class="form-group" style="margin:0;">
+                <label class="form-label" for="monthly_day">Day of month (1–28)</label>
+                <input id="monthly_day" class="form-control" type="number"
+                       name="monthly_day" min="1" max="28" value="1" />
+              </div>
+              <div class="form-group" style="margin:0;">
+                <label class="form-label" for="monthly_time">Time (24h)</label>
+                <input id="monthly_time" class="form-control" type="time" name="monthly_time" value="02:00" />
               </div>
             </div>
           </div>
@@ -357,7 +386,7 @@
 {% block scripts %}
 <script>
   function selectSchedule(type) {
-    ['now','daily','weekly','interval'].forEach(t => {
+    ['now','daily','weekly','monthly','interval'].forEach(t => {
       document.getElementById('opt-' + t).classList.remove('selected');
       const d = document.getElementById('detail-' + t);
       if (d) d.classList.remove('visible');

@@ -261,10 +261,11 @@ def create_and_start_job(
     vm_name, dest, compress, no_verify_ssl,
     sftp_host, sftp_user, sftp_password,
     schedule_type, schedule_time, weekly_day, interval_hours,
-    label='', disk_filter=None
+    label='', disk_filter=None, monthly_day=1
 ):
     """Create a job entry and either run immediately or register schedule.
     disk_filter: list of VMDK path strings to include, or None for all.
+    monthly_day: day of month (1-28) for monthly schedule.
     """
     jid = datetime.now().strftime('%Y%m%d%H%M%S') + '-' + uuid.uuid4().hex[:6]
     job_dir = JOBS_DIR / jid
@@ -305,6 +306,12 @@ def create_and_start_job(
             hour, minute = (schedule_time.split(':') + ['00'])[:2]
             trigger = CronTrigger(
                 day_of_week=int(weekly_day),
+                hour=int(hour), minute=int(minute)
+            )
+        elif schedule_type == 'monthly':
+            hour, minute = (schedule_time.split(':') + ['00'])[:2]
+            trigger = CronTrigger(
+                day=max(1, min(28, int(monthly_day or 1))),
                 hour=int(hour), minute=int(minute)
             )
         elif schedule_type == 'interval':
@@ -441,6 +448,8 @@ def create_job():
         daily_time    = request.form.get('daily_time', '02:00')
         weekly_day    = request.form.get('weekly_day', '0')
         weekly_time   = request.form.get('weekly_time', '02:00')
+        monthly_day   = request.form.get('monthly_day', '1')
+        monthly_time  = request.form.get('monthly_time', '02:00')
         interval_hrs  = request.form.get('interval_hours', '24')
         label         = request.form.get('job_label', '').strip()
 
@@ -453,6 +462,8 @@ def create_job():
             sched_time = daily_time
         elif schedule_type == 'weekly':
             sched_time = weekly_time
+        elif schedule_type == 'monthly':
+            sched_time = monthly_time
         else:
             sched_time = ''
 
@@ -478,10 +489,12 @@ def create_job():
             interval_hours=interval_hrs,
             label=label,
             disk_filter=disk_filter,
+            monthly_day=monthly_day,
         )
         n_disks = len(disk_filter) if disk_filter is not None else 'all'
         flash(f'Job created — {n_disks} disk(s) selected.', 'success')
         return redirect(url_for('job_detail', jobid=jid))
+
 
     # GET: load VM list for the dropdown
     selected_vm   = request.args.get('vm', '')
@@ -522,8 +535,21 @@ def batch_jobs():
         disk_strategy = request.form.get('disk_strategy', 'all')
         schedule_type = request.form.get('schedule_type', 'now')
         daily_time    = request.form.get('daily_time', '02:00')
+        weekly_day    = request.form.get('weekly_day', '0')
+        weekly_time   = request.form.get('weekly_time', '02:00')
+        monthly_day   = request.form.get('monthly_day', '1')
+        monthly_time  = request.form.get('monthly_time', '02:00')
+        interval_hrs  = request.form.get('interval_hours', '24')
         label_prefix  = request.form.get('job_label', '').strip()
-        sched_time    = daily_time if schedule_type == 'daily' else ''
+
+        if schedule_type == 'daily':
+            sched_time = daily_time
+        elif schedule_type == 'weekly':
+            sched_time = weekly_time
+        elif schedule_type == 'monthly':
+            sched_time = monthly_time
+        else:
+            sched_time = ''
 
         if not vm_names:
             flash('No VMs selected.', 'danger')
@@ -533,14 +559,13 @@ def batch_jobs():
         for vm_name in vm_names:
             # Resolve disk_filter from strategy
             if disk_strategy == 'os':
-                # Smallest disk = OS disk
                 vm_info = vms_by_name.get(vm_name, {})
                 disks = sorted(vm_info.get('disks', []), key=lambda d: d.get('size_gb', 0))
                 disk_filter = [disks[0]['path']] if disks else None
             elif disk_strategy == 'vmx':
-                disk_filter = []   # empty list = VMX only
+                disk_filter = []
             else:
-                disk_filter = None  # all disks
+                disk_filter = None
 
             label = f'{label_prefix} — {vm_name}' if label_prefix else vm_name
 
@@ -554,16 +579,18 @@ def batch_jobs():
                 sftp_password=None,
                 schedule_type=schedule_type,
                 schedule_time=sched_time,
-                weekly_day='0',
-                interval_hours='24',
+                weekly_day=weekly_day,
+                interval_hours=interval_hrs,
                 label=label,
                 disk_filter=disk_filter,
+                monthly_day=monthly_day,
             )
             created.append(jid)
 
         strat_label = {'all': 'all disks', 'os': 'OS disk only', 'vmx': 'VMX config only'}.get(disk_strategy, disk_strategy)
         flash(f'{len(created)} backup job{"s" if len(created)!=1 else ""} created ({strat_label}).', 'success')
         return redirect(url_for('jobs'))
+
 
     # GET: show batch config form
     vm_names = request.args.getlist('vms')
