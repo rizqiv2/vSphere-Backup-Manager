@@ -1,7 +1,7 @@
 module.exports = {
   apps: [
     {
-      name: 'vsphere-backup-gui',
+      name: 'vsphere-backup-manager',
       script: 'gui_app.py',
       // If you are using a virtual environment (recommended), set the interpreter to:
       // interpreter: './venv/bin/python3',

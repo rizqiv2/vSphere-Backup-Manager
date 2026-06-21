@@ -1,6 +1,7 @@
-# vSphere Snapshot Backup Tool
+# vSphere Backup Manager
 
-Simple CLI to automate the snapshot -> copy -> compress -> delete workflow for a VM on vCenter/ESXi.
+A web interface and CLI tool to automate, schedule, and manage snapshot-based backups for virtual machines on VMware vCenter/ESXi.
+
 
 Requirements
 - Python 3.8+
@@ -50,8 +51,9 @@ PM2 natively supports Python applications and can keep the server running across
 
 3. **Useful PM2 Commands**:
    - Status: `pm2 status`
-   - Logs: `pm2 logs vsphere-backup-gui`
-   - Restart: `pm2 restart vsphere-backup-gui`
-   - Stop: `pm2 stop vsphere-backup-gui`
+   - Logs: `pm2 logs vsphere-backup-manager`
+   - Restart: `pm2 restart vsphere-backup-manager`
+   - Stop: `pm2 stop vsphere-backup-manager`
    - Setup auto-start on server boot: `pm2 startup` and then run the command it outputs, followed by `pm2 save`.
+
 
