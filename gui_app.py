@@ -150,7 +150,8 @@ def list_nfs_mounts():
                         info['used_gb']   = round(used  / (1024**3), 1)
                         info['free_gb']   = round(free  / (1024**3), 1)
                         info['pct_used']  = int(used / total * 100) if total > 0 else 0
-                    except Exception:
+                    except Exception as e:
+                        print(f"ERROR: failed to get disk space for {parts[1]}: {e}", file=sys.stderr)
                         info.update({'total_gb': 0, 'used_gb': 0, 'free_gb': 0, 'pct_used': 0})
                     mounts.append(info)
     except (FileNotFoundError, PermissionError):
