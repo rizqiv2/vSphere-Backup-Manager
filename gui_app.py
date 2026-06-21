@@ -408,6 +408,8 @@ def run_job_thread(jid):
     info['started']  = time.time()
     info['progress'] = {'pct': 0, 'phase': 'starting', 'detail': 'Initializing…'}
     
+    is_cancelled = lambda: jobs.get(jid, {}).get('status') == 'cancelling'
+    
     vm_names = info.get('vm_names')
     log_path = str(JOBS_DIR / jid / 'backup.log')
     
@@ -421,6 +423,12 @@ def run_job_thread(jid):
         failed_vms = []
         
         for idx, vm in enumerate(vm_names):
+            if is_cancelled():
+                failed_vms.append((vm, "Cancelled by user"))
+                with open(log_path, 'a', encoding='utf-8') as f:
+                    f.write(f"\nSkipping VM {idx+1}/{total_vms} ({vm}): Backup cancelled by user\n")
+                continue
+                
             vm_pct_start = int((idx / total_vms) * 100)
             vm_pct_end = int(((idx + 1) / total_vms) * 100)
             
@@ -465,6 +473,7 @@ def run_job_thread(jid):
                     progress_cb=make_vm_progress_cb(vm, vm_pct_start, vm_pct_end, idx, total_vms),
                     disk_filter=disk_filter,
                     job_id=jid,
+                    is_cancelled_cb=is_cancelled,
                 )
                 success_vms.append(vm)
                 
@@ -477,9 +486,16 @@ def run_job_thread(jid):
                 }
                 enforce_retention_policy(vm_info, log_path=log_path)
             except Exception as e:
-                failed_vms.append((vm, str(e)))
-                with open(log_path, 'a', encoding='utf-8') as f:
-                    f.write(f"\nERROR backing up VM {vm}: {e}\n\n")
+                if "cancelled by user" in str(e).lower():
+                    failed_vms.append((vm, "Cancelled by user"))
+                    info['status'] = 'failed (Cancelled)'
+                    info['progress'] = {'pct': 100, 'phase': 'failed', 'detail': 'Backup cancelled by user'}
+                    save_jobs_db()
+                    break
+                else:
+                    failed_vms.append((vm, str(e)))
+                    with open(log_path, 'a', encoding='utf-8') as f:
+                        f.write(f"\nERROR backing up VM {vm}: {e}\n\n")
         
         if failed_vms:
             if success_vms:
@@ -523,6 +539,7 @@ def run_job_thread(jid):
                 progress_cb=progress_cb,
                 disk_filter=info.get('disk_filter'),  # None = all disks
                 job_id=jid,
+                is_cancelled_cb=is_cancelled,
             )
             info['status']   = 'finished'
             info['progress'] = {'pct': 100, 'phase': 'done', 'detail': 'Backup completed successfully'}
@@ -531,7 +548,11 @@ def run_job_thread(jid):
             # Enforce retention policy
             enforce_retention_policy(info, log_path=log_path)
         except Exception as e:
-            info['status'] = f'failed ({e})'
+            if "cancelled by user" in str(e).lower():
+                info['status'] = 'failed (Cancelled)'
+                info['progress'] = {'pct': 100, 'phase': 'failed', 'detail': 'Backup cancelled by user'}
+            else:
+                info['status'] = f'failed ({e})'
             save_jobs_db()
 
 
@@ -1020,6 +1041,22 @@ def run_job_now(jobid):
     t = threading.Thread(target=run_job_thread, args=(jobid,), daemon=True)
     t.start()
     flash('Backup triggered successfully and is running in the background.', 'success')
+    return redirect(url_for('job_detail', jobid=jobid))
+
+
+@app.route('/job/<jobid>/stop', methods=['POST'])
+@login_required
+def stop_job(jobid):
+    info = jobs.get(jobid)
+    if not info:
+        abort(404)
+    if info.get('status') in ('running', 'queued'):
+        info['status'] = 'cancelling'
+        info['progress'] = {'pct': info.get('progress', {}).get('pct', 0), 'phase': 'cancelling', 'detail': 'Stopping backup execution…'}
+        save_jobs_db()
+        flash('Request to stop backup sent.', 'info')
+    else:
+        flash('Job is not running or queued.', 'warning')
     return redirect(url_for('job_detail', jobid=jobid))
 
 

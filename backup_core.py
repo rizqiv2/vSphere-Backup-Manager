@@ -327,7 +327,8 @@ def upload_via_sftp(host, user, password, key_filename, local_path, remote_dir):
 
 def run_backup(host, user, password, vm_name, dest, compress=False, no_verify_ssl=False,
                sftp_host=None, sftp_user=None, sftp_password=None, sftp_key=None,
-               log_path=None, progress_cb=None, disk_filter=None, job_id=None):
+               log_path=None, progress_cb=None, disk_filter=None, job_id=None,
+               is_cancelled_cb=None):
     """Run full backup flow.
     disk_filter: if not None, a set/list of VMDK file-ref strings to include.
                  The VMX config file is always included regardless.
@@ -338,7 +339,8 @@ def run_backup(host, user, password, vm_name, dest, compress=False, no_verify_ss
             with redirect_stdout(logfile), redirect_stderr(logfile):
                 return _run_backup_impl(host, user, password, vm_name, dest, compress, no_verify_ssl,
                                         sftp_host, sftp_user, sftp_password, sftp_key,
-                                        progress_cb=progress_cb, disk_filter=disk_filter, job_id=job_id)
+                                        progress_cb=progress_cb, disk_filter=disk_filter, job_id=job_id,
+                                        is_cancelled_cb=is_cancelled_cb)
         try:
             return _wrap()
         finally:
@@ -346,12 +348,14 @@ def run_backup(host, user, password, vm_name, dest, compress=False, no_verify_ss
     else:
         return _run_backup_impl(host, user, password, vm_name, dest, compress, no_verify_ssl,
                                 sftp_host, sftp_user, sftp_password, sftp_key,
-                                progress_cb=progress_cb, disk_filter=disk_filter, job_id=job_id)
+                                progress_cb=progress_cb, disk_filter=disk_filter, job_id=job_id,
+                                is_cancelled_cb=is_cancelled_cb)
 
 
 def _run_backup_impl(host, user, password, vm_name, dest, compress, no_verify_ssl,
                      sftp_host, sftp_user, sftp_password, sftp_key,
-                     progress_cb=None, disk_filter=None, job_id=None):
+                     progress_cb=None, disk_filter=None, job_id=None,
+                     is_cancelled_cb=None):
     def _prog(phase, pct, detail=''):
         if progress_cb:
             try:
@@ -428,6 +432,8 @@ def _run_backup_impl(host, user, password, vm_name, dest, compress, no_verify_ss
             downloaded_files = []
             files_manifest_info = []
             for file_idx, ref in enumerate(all_refs):
+                if is_cancelled_cb and is_cancelled_cb():
+                    raise RuntimeError("Backup cancelled by user")
                 ds_name, ds_path = parse_datastore_path(ref)
                 dc = find_datacenter_for_datastore(content, ds_name)
                 if not dc:
@@ -441,6 +447,8 @@ def _run_backup_impl(host, user, password, vm_name, dest, compress, no_verify_ss
 
                 def make_dl_cb(fidx, total, base_pct, share, fname):
                     def _dl_cb(done, total_b):
+                        if is_cancelled_cb and is_cancelled_cb():
+                            raise RuntimeError("Backup cancelled by user")
                         if total_b > 0:
                             file_pct = done / total_b
                             overall_pct = int(base_pct + file_pct * share)
@@ -482,6 +490,8 @@ def _run_backup_impl(host, user, password, vm_name, dest, compress, no_verify_ss
                 })
 
             _prog('compressing', 90, 'Downloads complete. Creating manifest…')
+            if is_cancelled_cb and is_cancelled_cb():
+                raise RuntimeError("Backup cancelled by user")
 
             # Write manifest.json
             finished_iso = datetime.utcnow().strftime('%Y-%m-%dT%H:%M:%SZ')
@@ -501,6 +511,8 @@ def _run_backup_impl(host, user, password, vm_name, dest, compress, no_verify_ss
 
             final_files = []
             for f in downloaded_files:
+                if is_cancelled_cb and is_cancelled_cb():
+                    raise RuntimeError("Backup cancelled by user")
                 if compress:
                     _prog('compressing', 92, f'Compressing {os.path.basename(f)}…')
                     cf = maybe_compress(f)
@@ -514,6 +526,9 @@ def _run_backup_impl(host, user, password, vm_name, dest, compress, no_verify_ss
             if sftp_host:
                 if not sftp_user:
                     raise Exception('SFTP user required')
+
+                if is_cancelled_cb and is_cancelled_cb():
+                    raise RuntimeError("Backup cancelled by user")
 
                 # Verify checksums before upload
                 _prog('uploading', 94, 'Verifying local checksums before SFTP upload…')
