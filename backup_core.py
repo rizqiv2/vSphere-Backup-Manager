@@ -339,7 +339,11 @@ def _run_backup_impl(host, user, password, vm_name, dest, compress, no_verify_ss
                 if not vmdk_refs:
                     print("Warning: no disks selected — backing up VMX config only.")
 
-            all_refs = vmdk_refs[:]
+            all_refs = []
+            for ref in vmdk_refs:
+                all_refs.append(ref)
+                if ref.lower().endswith('.vmdk') and not ref.lower().endswith('-flat.vmdk'):
+                    all_refs.append(ref[:-5] + '-flat.vmdk')
             if vmx_ref:
                 all_refs.append(vmx_ref)
 
