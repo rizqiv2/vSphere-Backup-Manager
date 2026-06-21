@@ -232,6 +232,33 @@
         </div>
       </div>
 
+      <!-- Retention Policy -->
+      <div class="section-card">
+        <div class="section-card-header">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="vertical-align: middle; margin-right: 6px;"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg>
+          Retention Policy
+        </div>
+        <div class="section-card-body">
+          <div class="form-row">
+            <div class="form-group" style="margin:0;">
+              <label class="form-label" for="retention_type">Backups to keep</label>
+              <select id="retention_type" name="retention_type" class="form-control" onchange="onRetentionChange(this.value)">
+                <option value="keep_all">Keep all backups (No automatic deletion)</option>
+                <option value="keep_count">Keep latest N backups (Count based)</option>
+                <option value="keep_days">Keep backups for N days (Age based)</option>
+              </select>
+            </div>
+            <div class="form-group" id="retention_val_group" style="margin:0; display:none;">
+              <label class="form-label" for="retention_value">Number of backups (N)</label>
+              <input id="retention_value" class="form-control" type="number" name="retention_value" value="5" min="1" max="1000" />
+            </div>
+          </div>
+          <div style="font-size:12px;color:var(--text-muted);margin-top:10px;" id="retention_hint">
+            All successful backup copies will be preserved indefinitely.
+          </div>
+        </div>
+      </div>
+
       <!-- Schedule -->
       <div class="section-card">
         <div class="section-card-header">
@@ -528,5 +555,28 @@
       wrap.style.display = '';
     })
     .catch(() => {});
+
+  function onRetentionChange(val) {
+    const valGroup = document.getElementById('retention_val_group');
+    const hint = document.getElementById('retention_hint');
+    const input = document.getElementById('retention_value');
+    
+    if (val === 'keep_all') {
+      valGroup.style.display = 'none';
+      hint.textContent = 'All successful backup copies will be preserved indefinitely.';
+    } else if (val === 'keep_count') {
+      valGroup.style.display = '';
+      input.min = '1';
+      input.value = input.value || '5';
+      document.querySelector('label[for="retention_value"]').textContent = 'Number of backups (N)';
+      hint.textContent = 'Only the latest N successful backups will be kept. Older ones will be deleted automatically.';
+    } else if (val === 'keep_days') {
+      valGroup.style.display = '';
+      input.min = '1';
+      input.value = input.value || '7';
+      document.querySelector('label[for="retention_value"]').textContent = 'Number of days (N)';
+      hint.textContent = 'Backups older than N days will be deleted automatically.';
+    }
+  }
 </script>
 {% endblock %}

@@ -178,8 +178,26 @@
       <div class="detail-item-val mono" style="font-size:13px;">{{ job.started_fmt }}</div>
     </div>
     <div class="detail-item">
-      <div class="detail-item-label">Destination</div>
-      <div class="detail-item-val mono" style="font-size:12px; word-break:break-all;">{{ job.dest or '—' }}</div>
+      <div class="detail-item-label">Backup Location</div>
+      <div class="detail-item-val mono" style="font-size:12px; word-break:break-all;">
+        {% if job.run_dest %}
+          {{ job.run_dest }}
+        {% else %}
+          {{ job.dest or '—' }}
+        {% endif %}
+      </div>
+    </div>
+    <div class="detail-item">
+      <div class="detail-item-label">Retention Policy</div>
+      <div class="detail-item-val" style="font-size:13px;">
+        {% if job.retention_type == 'keep_count' %}
+          Keep latest {{ job.retention_value }} successful backups
+        {% elif job.retention_type == 'keep_days' %}
+          Keep backups for {{ job.retention_value }} days
+        {% else %}
+          Keep all backups (No cleanup)
+        {% endif %}
+      </div>
     </div>
     <div class="detail-item">
       <div class="detail-item-label">Options</div>

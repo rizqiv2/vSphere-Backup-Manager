@@ -146,13 +146,22 @@
           </td>
           <td>
             {% if job.schedule_type and job.schedule_type != 'now' %}
-              <span class="schedule-tag">
+              <span class="schedule-tag" style="margin-bottom: 4px;">
                 <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" style="margin-right: 4px;"><path d="M23 4v6h-6"/><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"/></svg>
                 {{ job.schedule_type|capitalize }}
               </span>
             {% else %}
-              <span class="text-muted text-small">One-time</span>
+              <span class="text-muted text-small" style="display: block; margin-bottom: 4px;">One-time</span>
             {% endif %}
+            <div class="text-muted" style="font-size:11px; margin-top: 2px;">
+              {% if job.retention_type == 'keep_count' %}
+                Keep: {{ job.retention_value }} backups
+              {% elif job.retention_type == 'keep_days' %}
+                Keep: {{ job.retention_value }} days
+              {% else %}
+                Keep: All
+              {% endif %}
+            </div>
           </td>
           <td class="text-small text-muted">
             {{ job.started_fmt }}

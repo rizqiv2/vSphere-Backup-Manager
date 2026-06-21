@@ -42,17 +42,102 @@ BASE_DIR  = Path(__file__).resolve().parent
 JOBS_DIR  = BASE_DIR / 'jobs'
 JOBS_DIR.mkdir(exist_ok=True)
 
+JOBS_DB_PATH = BASE_DIR / 'jobs.json'
+jobs_db_lock = threading.Lock()
+
 # In-memory job store: {job_id: job_dict}
-# job_dict keys: id, label, vm_name, status, started, dest, compress,
-#                no_verify_ssl, sftp_host, sftp_user, sftp_password,
-#                log, schedule_type, schedule_time, schedule_id
 jobs: dict = {}
+
+def load_jobs_db():
+    global jobs
+    if JOBS_DB_PATH.exists():
+        try:
+            with open(JOBS_DB_PATH, 'r', encoding='utf-8') as f:
+                with jobs_db_lock:
+                    jobs.clear()
+                    jobs.update(json.load(f))
+        except Exception as e:
+            print(f"ERROR: Failed to load jobs database: {e}", file=sys.stderr)
+    else:
+        with jobs_db_lock:
+            jobs.clear()
+
+def save_jobs_db():
+    with jobs_db_lock:
+        try:
+            with open(JOBS_DB_PATH, 'w', encoding='utf-8') as f:
+                json.dump(jobs, f, indent=2, ensure_ascii=False)
+        except Exception as e:
+            print(f"ERROR: Failed to save jobs database: {e}", file=sys.stderr)
 
 # APScheduler instance
 scheduler = None
 if HAS_SCHEDULER:
     scheduler = BackgroundScheduler(daemon=True)
     scheduler.start()
+
+def reschedule_active_jobs():
+    if not HAS_SCHEDULER or not scheduler:
+        return
+    rescheduled_count = 0
+    for jid, info in list(jobs.items()):
+        if info.get('status') == 'scheduled' and info.get('schedule_id'):
+            try:
+                # Remove first to prevent duplicates
+                try:
+                    scheduler.remove_job(info['schedule_id'])
+                except Exception:
+                    pass
+
+                trigger = None
+                schedule_type = info.get('schedule_type')
+                schedule_time = info.get('schedule_time', '')
+                weekly_day = info.get('weekly_day', '0')
+                monthly_day = info.get('monthly_day', '1')
+                interval_hours = info.get('interval_hours', '24')
+                vm_name = info.get('vm_name')
+                label = info.get('label', '')
+
+                if schedule_type == 'daily':
+                    hour, minute = (schedule_time.split(':') + ['00'])[:2]
+                    trigger = CronTrigger(hour=int(hour), minute=int(minute))
+                elif schedule_type == 'weekly':
+                    hour, minute = (schedule_time.split(':') + ['00'])[:2]
+                    trigger = CronTrigger(
+                        day_of_week=int(weekly_day),
+                        hour=int(hour), minute=int(minute)
+                    )
+                elif schedule_type == 'monthly':
+                    hour, minute = (schedule_time.split(':') + ['00'])[:2]
+                    trigger = CronTrigger(
+                        day=max(1, min(28, int(monthly_day or 1))),
+                        hour=int(hour), minute=int(minute)
+                    )
+                elif schedule_type == 'interval':
+                    trigger = IntervalTrigger(hours=max(1, int(interval_hours or 24)))
+
+                if trigger:
+                    def make_runner(j):
+                        def _runner():
+                            run_job_thread(j)
+                        return _runner
+
+                    scheduler.add_job(
+                        make_runner(jid),
+                        trigger=trigger,
+                        id=info['schedule_id'],
+                        name=f"Backup {vm_name} ({label or jid[:8]})",
+                        misfire_grace_time=3600,
+                        max_instances=1,
+                    )
+                    rescheduled_count += 1
+            except Exception as e:
+                print(f"ERROR: Failed to reschedule job {jid}: {e}", file=sys.stderr)
+    print(f"Loaded {len(jobs)} jobs and re-scheduled {rescheduled_count} jobs.")
+
+# Load database and reschedule active tasks on startup
+load_jobs_db()
+reschedule_active_jobs()
 
 # ── VM list cache ─────────────────────────────────────────────────────────────
 # Keyed by (host, user) so different users get separate caches.
@@ -212,6 +297,7 @@ def job_to_display(jid, info):
         'status':        info.get('status', 'unknown'),
         'started_fmt':   fmt_time(info.get('started')),
         'dest':          info.get('dest', ''),
+        'run_dest':      info.get('run_dest', ''),
         'compress':      info.get('compress', False),
         'sftp_host':     info.get('sftp_host', ''),
         'schedule_type': info.get('schedule_type', 'now'),
@@ -219,7 +305,81 @@ def job_to_display(jid, info):
         'schedule_id':   info.get('schedule_id'),
         'disk_filter':   disk_filter,
         'disks_count':   len(disk_filter) if disk_filter is not None else None,
+        'retention_type':  info.get('retention_type', 'keep_all'),
+        'retention_value': info.get('retention_value', 5),
     }
+
+
+def enforce_retention_policy(info, log_path=None):
+    def log_msg(msg):
+        print(msg)
+        if log_path:
+            try:
+                with open(log_path, 'a', encoding='utf-8') as f:
+                    f.write(f"[Retention] {msg}\n")
+            except Exception:
+                pass
+
+    retention_type = info.get('retention_type', 'keep_all')
+    retention_val = info.get('retention_value', 5)
+    if retention_type == 'keep_all':
+        return
+
+    vm_name = info.get('vm_name')
+    parent_dest = info.get('dest')
+    if not vm_name or not parent_dest:
+        return
+
+    vm_dir = os.path.join(parent_dest, vm_name)
+    if not os.path.exists(vm_dir):
+        return
+
+    try:
+        subdirs = []
+        for name in os.listdir(vm_dir):
+            path = os.path.join(vm_dir, name)
+            if os.path.isdir(path) and name.startswith('backup-'):
+                subdirs.append((name, path))
+
+        # Sort chronologically by folder name (backup-YYYYMMDDHHMMSS)
+        subdirs.sort(key=lambda x: x[0])
+
+        if retention_type == 'keep_count':
+            if len(subdirs) > retention_val:
+                to_delete = subdirs[:-retention_val]
+                log_msg(f"Enforcing count retention (keep {retention_val}). Deleting {len(to_delete)} old backup(s)...")
+                for name, path in to_delete:
+                    try:
+                        import shutil
+                        shutil.rmtree(path)
+                        log_msg(f"Deleted old backup directory: {name}")
+                    except Exception as e:
+                        log_msg(f"ERROR deleting {name}: {e}")
+
+        elif retention_type == 'keep_days':
+            import shutil
+            cutoff_time = time.time() - (retention_val * 86400)
+            deleted_count = 0
+            for name, path in subdirs:
+                try:
+                    ts_str = name[7:]
+                    dt = datetime.strptime(ts_str[:14], '%Y%m%d%H%M%S')
+                    folder_time = dt.timestamp()
+                except Exception:
+                    folder_time = os.path.getmtime(path)
+
+                if folder_time < cutoff_time:
+                    try:
+                        shutil.rmtree(path)
+                        log_msg(f"Deleted backup older than {retention_val} days: {name}")
+                        deleted_count += 1
+                    except Exception as e:
+                        log_msg(f"ERROR deleting {name}: {e}")
+            if deleted_count > 0:
+                log_msg(f"Enforced age retention. Deleted {deleted_count} backups.")
+
+    except Exception as e:
+        log_msg(f"ERROR during retention cleanup: {e}")
 
 
 def run_job_thread(jid):
@@ -230,6 +390,14 @@ def run_job_thread(jid):
     info['status']   = 'running'
     info['started']  = time.time()
     info['progress'] = {'pct': 0, 'phase': 'starting', 'detail': 'Initializing…'}
+    
+    # Create run-specific destination folder to prevent overwrites
+    run_timestamp = datetime.fromtimestamp(info['started']).strftime('%Y%m%d%H%M%S')
+    run_dest = os.path.join(info['dest'], info['vm_name'], f"backup-{run_timestamp}")
+    info['run_dest'] = run_dest
+    
+    save_jobs_db()
+    
     log_path = str(JOBS_DIR / jid / 'backup.log')
 
     def progress_cb(prog):
@@ -241,7 +409,7 @@ def run_job_thread(jid):
             user=info['user'],
             password=info['password'],
             vm_name=info['vm_name'],
-            dest=info['dest'],
+            dest=run_dest,
             compress=info.get('compress', False),
             no_verify_ssl=info.get('no_verify_ssl', False),
             sftp_host=info.get('sftp_host') or None,
@@ -254,15 +422,21 @@ def run_job_thread(jid):
         )
         info['status']   = 'finished'
         info['progress'] = {'pct': 100, 'phase': 'done', 'detail': 'Backup completed successfully'}
+        save_jobs_db()
+        
+        # Enforce retention policy
+        enforce_retention_policy(info, log_path=log_path)
     except Exception as e:
         info['status'] = f'failed ({e})'
+        save_jobs_db()
 
 
 def create_and_start_job(
     vm_name, dest, compress, no_verify_ssl,
     sftp_host, sftp_user, sftp_password,
     schedule_type, schedule_time, weekly_day, interval_hours,
-    label='', disk_filter=None, monthly_day=1
+    label='', disk_filter=None, monthly_day=1,
+    retention_type='keep_all', retention_value=5
 ):
     """Create a job entry and either run immediately or register schedule.
     disk_filter: list of VMDK path strings to include, or None for all.
@@ -291,6 +465,11 @@ def create_and_start_job(
         'schedule_time': schedule_time,
         'schedule_id':   None,
         'disk_filter':   disk_filter,  # None = back up all disks
+        'weekly_day':    weekly_day,
+        'monthly_day':   monthly_day,
+        'interval_hours': interval_hours,
+        'retention_type':  retention_type,
+        'retention_value': retention_value,
     }
     jobs[jid] = info
 
@@ -340,6 +519,7 @@ def create_and_start_job(
             t = threading.Thread(target=run_job_thread, args=(jid,), daemon=True)
             t.start()
 
+    save_jobs_db()
     return jid
 
 
@@ -476,6 +656,12 @@ def create_job():
         else:
             disk_filter = None  # disks not shown yet = backup all
 
+        retention_type = request.form.get('retention_type', 'keep_all')
+        try:
+            retention_value = int(request.form.get('retention_value', '5'))
+        except ValueError:
+            retention_value = 5
+
         jid = create_and_start_job(
             vm_name=vm_name,
             dest=dest,
@@ -491,6 +677,8 @@ def create_job():
             label=label,
             disk_filter=disk_filter,
             monthly_day=monthly_day,
+            retention_type=retention_type,
+            retention_value=retention_value,
         )
         n_disks = len(disk_filter) if disk_filter is not None else 'all'
         flash(f'Job created — {n_disks} disk(s) selected.', 'success')
@@ -570,6 +758,12 @@ def batch_jobs():
 
             label = f'{label_prefix} — {vm_name}' if label_prefix else vm_name
 
+            retention_type = request.form.get('retention_type', 'keep_all')
+            try:
+                retention_value = int(request.form.get('retention_value', '5'))
+            except ValueError:
+                retention_value = 5
+
             jid = create_and_start_job(
                 vm_name=vm_name,
                 dest=dest,
@@ -585,6 +779,8 @@ def batch_jobs():
                 label=label,
                 disk_filter=disk_filter,
                 monthly_day=monthly_day,
+                retention_type=retention_type,
+                retention_value=retention_value,
             )
             created.append(jid)
 
@@ -671,6 +867,7 @@ def cancel_schedule(jobid):
             pass
     info['schedule_id'] = None
     info['status'] = info.get('status', 'finished') if info.get('status') not in ('queued', 'running') else info['status']
+    save_jobs_db()
     flash('Recurring schedule cancelled.', 'success')
     return redirect(url_for('job_detail', jobid=jobid))
 
