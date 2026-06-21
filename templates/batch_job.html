@@ -210,6 +210,11 @@
             <input type="checkbox" id="compress" name="compress" />
             <label for="compress">Compress with zstd (smaller files, slower)</label>
           </div>
+          <div class="form-check">
+            <input type="checkbox" id="no_verify_ssl" name="no_verify_ssl"
+                   {% if session.get('no_verify_ssl') %}checked{% endif %} />
+            <label for="no_verify_ssl">Skip SSL certificate verification</label>
+          </div>
         </div>
       </div>
 

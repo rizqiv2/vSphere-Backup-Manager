@@ -865,7 +865,7 @@ def batch_jobs():
         vm_names      = request.form.getlist('vms')
         dest          = request.form.get('dest', './backups').strip()
         compress      = 'compress' in request.form
-        no_verify_ssl = session.get('no_verify_ssl', False)
+        no_verify_ssl = 'no_verify_ssl' in request.form
         disk_strategy = request.form.get('disk_strategy', 'all')
         schedule_type = request.form.get('schedule_type', 'now')
         daily_time    = request.form.get('daily_time', '02:00')
