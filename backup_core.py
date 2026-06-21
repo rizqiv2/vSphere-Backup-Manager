@@ -259,7 +259,7 @@ def run_backup(host, user, password, vm_name, dest, compress=False, no_verify_ss
                  The VMX config file is always included regardless.
     """
     if log_path:
-        logfile = open(log_path, 'ab')
+        logfile = open(log_path, 'a', encoding='utf-8', buffering=1)
         def _wrap():
             with redirect_stdout(logfile), redirect_stderr(logfile):
                 return _run_backup_impl(host, user, password, vm_name, dest, compress, no_verify_ssl,
