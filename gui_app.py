@@ -1023,6 +1023,39 @@ def run_job_now(jobid):
     return redirect(url_for('job_detail', jobid=jobid))
 
 
+@app.route('/job/<jobid>/delete', methods=['POST'])
+@login_required
+def delete_job(jobid):
+    info = jobs.get(jobid)
+    if not info:
+        abort(404)
+    
+    # Cancel schedule first if it exists
+    sched_id = info.get('schedule_id')
+    if sched_id and scheduler:
+        try:
+            scheduler.remove_job(sched_id)
+        except Exception:
+            pass
+            
+    # Remove from jobs dict
+    with jobs_db_lock:
+        jobs.pop(jobid, None)
+    save_jobs_db()
+    
+    # Remove the job directory containing the log file
+    import shutil
+    job_dir = JOBS_DIR / jobid
+    if job_dir.exists():
+        try:
+            shutil.rmtree(job_dir)
+        except Exception as e:
+            print(f"ERROR: Failed to delete job directory {job_dir}: {e}", file=sys.stderr)
+            
+    flash('Job and its schedule deleted successfully.', 'success')
+    return redirect(url_for('list_jobs'))
+
+
 # ── Template filter ───────────────────────────────────────────────────────────
 @app.template_filter('startswith')
 def startswith_filter(value, prefix):
