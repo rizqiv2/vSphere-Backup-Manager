@@ -1,11 +1,14 @@
 import atexit
 import getpass
+import hashlib
+import json
 import os
 import re
 import ssl
 import sys
 import time
 import urllib.parse
+from datetime import datetime
 from contextlib import redirect_stdout, redirect_stderr
 from pathlib import Path
 
@@ -210,6 +213,74 @@ def remove_snapshot(snapshot_obj):
     print("Snapshot removed")
 
 
+def get_file_sha256(filepath, decompress_if_zst=False):
+    """Compute the SHA-256 hash of a file. Optionally decompress on-the-fly if it is a .zst file."""
+    sha256 = hashlib.sha256()
+    if decompress_if_zst and str(filepath).lower().endswith('.zst'):
+        try:
+            import zstandard as zstd
+            with open(filepath, 'rb') as f:
+                dctx = zstd.ZstdDecompressor()
+                decompressor = dctx.read_to_iter(f, read_size=4*1024*1024)
+                for chunk in decompressor:
+                    sha256.update(chunk)
+            return sha256.hexdigest()
+        except Exception as e:
+            print(f"Warning: Failed to decompress on the fly for SHA calculation: {e}. Falling back to raw file hash.")
+            sha256 = hashlib.sha256()
+
+    with open(filepath, 'rb') as f:
+        while True:
+            chunk = f.read(4 * 1024 * 1024)
+            if not chunk:
+                break
+            sha256.update(chunk)
+    return sha256.hexdigest()
+
+
+def verify_backup_checksums(dest_dir):
+    """Verify all files inside a backup directory using its manifest.json."""
+    manifest_path = os.path.join(dest_dir, 'manifest.json')
+    if not os.path.exists(manifest_path):
+        print(f"No manifest.json found in {dest_dir}, skipping checksum verification.")
+        return True
+
+    try:
+        with open(manifest_path, 'r', encoding='utf-8') as f:
+            manifest = json.load(f)
+    except Exception as e:
+        print(f"Error reading manifest.json: {e}")
+        return False
+
+    print(f"Verifying checksums for backup of VM: {manifest.get('vm_name', 'unknown')}")
+    all_ok = True
+    for file_info in manifest.get('files', []):
+        rel_path = file_info.get('path')
+        expected_sha = file_info.get('sha256')
+
+        # Determine actual file on disk (could be compressed with .zst extension)
+        filepath = os.path.join(dest_dir, rel_path)
+        actual_path = filepath
+        decompress = False
+        if not os.path.exists(filepath):
+            if os.path.exists(filepath + '.zst'):
+                actual_path = filepath + '.zst'
+                decompress = True
+            else:
+                print(f"Verification FAILED: File not found: {filepath}")
+                all_ok = False
+                continue
+
+        actual_sha = get_file_sha256(actual_path, decompress_if_zst=decompress)
+        if actual_sha == expected_sha:
+            print(f"Verification OK: {rel_path} (decompress={decompress})")
+        else:
+            print(f"Verification FAILED: {rel_path} (Expected: {expected_sha}, Got: {actual_sha})")
+            all_ok = False
+
+    return all_ok
+
+
 def maybe_compress(path):
     try:
         import subprocess
@@ -256,7 +327,7 @@ def upload_via_sftp(host, user, password, key_filename, local_path, remote_dir):
 
 def run_backup(host, user, password, vm_name, dest, compress=False, no_verify_ssl=False,
                sftp_host=None, sftp_user=None, sftp_password=None, sftp_key=None,
-               log_path=None, progress_cb=None, disk_filter=None):
+               log_path=None, progress_cb=None, disk_filter=None, job_id=None):
     """Run full backup flow.
     disk_filter: if not None, a set/list of VMDK file-ref strings to include.
                  The VMX config file is always included regardless.
@@ -267,7 +338,7 @@ def run_backup(host, user, password, vm_name, dest, compress=False, no_verify_ss
             with redirect_stdout(logfile), redirect_stderr(logfile):
                 return _run_backup_impl(host, user, password, vm_name, dest, compress, no_verify_ssl,
                                         sftp_host, sftp_user, sftp_password, sftp_key,
-                                        progress_cb=progress_cb, disk_filter=disk_filter)
+                                        progress_cb=progress_cb, disk_filter=disk_filter, job_id=job_id)
         try:
             return _wrap()
         finally:
@@ -275,12 +346,12 @@ def run_backup(host, user, password, vm_name, dest, compress=False, no_verify_ss
     else:
         return _run_backup_impl(host, user, password, vm_name, dest, compress, no_verify_ssl,
                                 sftp_host, sftp_user, sftp_password, sftp_key,
-                                progress_cb=progress_cb, disk_filter=disk_filter)
+                                progress_cb=progress_cb, disk_filter=disk_filter, job_id=job_id)
 
 
 def _run_backup_impl(host, user, password, vm_name, dest, compress, no_verify_ssl,
                      sftp_host, sftp_user, sftp_password, sftp_key,
-                     progress_cb=None, disk_filter=None):
+                     progress_cb=None, disk_filter=None, job_id=None):
     def _prog(phase, pct, detail=''):
         if progress_cb:
             try:
@@ -289,6 +360,7 @@ def _run_backup_impl(host, user, password, vm_name, dest, compress, no_verify_ss
                 pass
 
     si = None
+    started_iso = datetime.utcnow().strftime('%Y-%m-%dT%H:%M:%SZ')
     try:
         _prog('connecting', 0, 'Connecting to vCenter…')
         si = get_si(host, user, password, no_verify_ssl=no_verify_ssl)
@@ -354,6 +426,7 @@ def _run_backup_impl(host, user, password, vm_name, dest, compress, no_verify_ss
             download_range = DOWNLOAD_END - DOWNLOAD_START
 
             downloaded_files = []
+            files_manifest_info = []
             for file_idx, ref in enumerate(all_refs):
                 ds_name, ds_path = parse_datastore_path(ref)
                 dc = find_datacenter_for_datastore(content, ds_name)
@@ -392,7 +465,40 @@ def _run_backup_impl(host, user, password, vm_name, dest, compress, no_verify_ss
                 )
                 downloaded_files.append(local_file)
 
-            _prog('compressing', 90, 'Download complete')
+                # Compute checksum immediately after download
+                _prog('downloading', file_base_pct + int(file_share * 0.95), f'Calculating checksum for {os.path.basename(ds_path)}…')
+                print(f"Calculating SHA-256 checksum for {local_file}")
+                t0 = time.time()
+                file_sha = get_file_sha256(local_file)
+                file_size = os.path.getsize(local_file)
+                print(f"SHA-256: {file_sha} (size: {file_size} bytes, took {time.time() - t0:.2f}s)")
+
+                # Relative path from dest directory using forward slashes (e.g. "datastore1/Nakivo/Nakivo.vmdk")
+                rel_path = os.path.relpath(local_file, dest).replace(os.sep, '/')
+                files_manifest_info.append({
+                    "path": rel_path,
+                    "size_bytes": file_size,
+                    "sha256": file_sha
+                })
+
+            _prog('compressing', 90, 'Downloads complete. Creating manifest…')
+
+            # Write manifest.json
+            finished_iso = datetime.utcnow().strftime('%Y-%m-%dT%H:%M:%SZ')
+            manifest_data = {
+                "job_id": job_id or "...",
+                "vm_name": vm_name,
+                "started": started_iso,
+                "finished": finished_iso,
+                "vcenter": host,
+                "snapshot": snap_name,
+                "files": files_manifest_info
+            }
+            manifest_path = os.path.join(dest, 'manifest.json')
+            with open(manifest_path, 'w', encoding='utf-8') as f:
+                json.dump(manifest_data, f, indent=2)
+            print(f"Backup manifest created at {manifest_path}")
+
             final_files = []
             for f in downloaded_files:
                 if compress:
@@ -402,9 +508,20 @@ def _run_backup_impl(host, user, password, vm_name, dest, compress, no_verify_ss
                 else:
                     final_files.append(f)
 
+            # manifest.json is added uncompressed
+            final_files.append(manifest_path)
+
             if sftp_host:
                 if not sftp_user:
                     raise Exception('SFTP user required')
+
+                # Verify checksums before upload
+                _prog('uploading', 94, 'Verifying local checksums before SFTP upload…')
+                print("Running pre-upload checksum verification...")
+                if not verify_backup_checksums(dest):
+                    raise Exception("Pre-upload checksum verification failed. Aborting SFTP upload to prevent remote corruption.")
+                print("Checksum verification succeeded.")
+
                 _prog('uploading', 95, f'Uploading to {sftp_host}…')
                 for f in final_files:
                     upload_via_sftp(sftp_host, sftp_user, sftp_password, sftp_key, f, os.path.basename(dest))

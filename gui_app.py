@@ -238,7 +238,7 @@ def list_nfs_mounts():
                     try:
                         st = os.statvfs(parts[1])
                         total = st.f_blocks * st.f_frsize
-                        free  = st.f_available * st.f_frsize
+                        free  = st.f_bavail * st.f_frsize
                         used  = total - free
                         info['total_gb']  = round(total / (1024**3), 1)
                         info['used_gb']   = round(used  / (1024**3), 1)
@@ -464,6 +464,7 @@ def run_job_thread(jid):
                     log_path=log_path,
                     progress_cb=make_vm_progress_cb(vm, vm_pct_start, vm_pct_end, idx, total_vms),
                     disk_filter=disk_filter,
+                    job_id=jid,
                 )
                 success_vms.append(vm)
                 
@@ -521,6 +522,7 @@ def run_job_thread(jid):
                 log_path=log_path,
                 progress_cb=progress_cb,
                 disk_filter=info.get('disk_filter'),  # None = all disks
+                job_id=jid,
             )
             info['status']   = 'finished'
             info['progress'] = {'pct': 100, 'phase': 'done', 'detail': 'Backup completed successfully'}
