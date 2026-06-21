@@ -167,10 +167,16 @@
             {{ job.started_fmt }}
           </td>
           <td>
-            <div class="job-actions">
+            <div class="job-actions" style="display: flex; gap: 8px;">
               <a href="/job/{{ job.id }}" class="btn btn-ghost btn-sm">View</a>
+              {% if job.status != 'running' and job.status != 'queued' %}
+              <form method="post" action="/job/{{ job.id }}/run" style="margin: 0;">
+                <button class="btn btn-primary btn-sm" type="submit">Run Now</button>
+              </form>
+              {% endif %}
               {% if job.schedule_id %}
               <form method="post" action="/job/{{ job.id }}/cancel-schedule"
+                    style="margin: 0;"
                     onsubmit="return confirm('Cancel this schedule?')">
                 <button class="btn btn-danger btn-sm" type="submit">Cancel Schedule</button>
               </form>

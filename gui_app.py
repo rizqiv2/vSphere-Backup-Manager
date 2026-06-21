@@ -898,6 +898,23 @@ def cancel_schedule(jobid):
     return redirect(url_for('job_detail', jobid=jobid))
 
 
+@app.route('/job/<jobid>/run', methods=['POST'])
+@login_required
+def run_job_now(jobid):
+    info = jobs.get(jobid)
+    if not info:
+        abort(404)
+    if info.get('status') in ('running', 'queued'):
+        flash('Backup is already running or queued.', 'warning')
+        return redirect(url_for('job_detail', jobid=jobid))
+    
+    # Start backup execution in a background thread
+    t = threading.Thread(target=run_job_thread, args=(jobid,), daemon=True)
+    t.start()
+    flash('Backup triggered successfully and is running in the background.', 'success')
+    return redirect(url_for('job_detail', jobid=jobid))
+
+
 # ── Template filter ───────────────────────────────────────────────────────────
 @app.template_filter('startswith')
 def startswith_filter(value, prefix):
