@@ -109,8 +109,11 @@ def reschedule_active_jobs():
                     )
                 elif schedule_type == 'monthly':
                     hour, minute = (schedule_time.split(':') + ['00'])[:2]
+                    day_val = monthly_day
+                    if str(day_val).isdigit():
+                        day_val = max(1, min(28, int(day_val)))
                     trigger = CronTrigger(
-                        day=max(1, min(28, int(monthly_day or 1))),
+                        day=day_val,
                         hour=int(hour), minute=int(minute)
                     )
                 elif schedule_type == 'interval':
@@ -307,6 +310,8 @@ def job_to_display(jid, info):
         'disks_count':   len(disk_filter) if disk_filter is not None else None,
         'retention_type':  info.get('retention_type', 'keep_all'),
         'retention_value': info.get('retention_value', 5),
+        'monthly_day':     info.get('monthly_day'),
+        'weekly_day':      info.get('weekly_day'),
     }
 
 
@@ -490,8 +495,11 @@ def create_and_start_job(
             )
         elif schedule_type == 'monthly':
             hour, minute = (schedule_time.split(':') + ['00'])[:2]
+            day_val = monthly_day
+            if str(day_val).isdigit():
+                day_val = max(1, min(28, int(day_val)))
             trigger = CronTrigger(
-                day=max(1, min(28, int(monthly_day or 1))),
+                day=day_val,
                 hour=int(hour), minute=int(minute)
             )
         elif schedule_type == 'interval':
@@ -629,8 +637,17 @@ def create_job():
         daily_time    = request.form.get('daily_time', '02:00')
         weekly_day    = request.form.get('weekly_day', '0')
         weekly_time   = request.form.get('weekly_time', '02:00')
-        monthly_day   = request.form.get('monthly_day', '1')
-        monthly_time  = request.form.get('monthly_time', '02:00')
+        
+        monthly_basis = request.form.get('monthly_basis', 'day_num')
+        if monthly_basis == 'weekday':
+            monthly_week_num = request.form.get('monthly_week_num', '1st')
+            monthly_day_of_week = request.form.get('monthly_day_of_week', 'sun')
+            monthly_day = f"{monthly_week_num} {monthly_day_of_week}"
+            monthly_time = request.form.get('monthly_time_2', '02:00')
+        else:
+            monthly_day = request.form.get('monthly_day', '1')
+            monthly_time = request.form.get('monthly_time_1', '02:00')
+            
         interval_hrs  = request.form.get('interval_hours', '24')
         label         = request.form.get('job_label', '').strip()
 
@@ -726,8 +743,17 @@ def batch_jobs():
         daily_time    = request.form.get('daily_time', '02:00')
         weekly_day    = request.form.get('weekly_day', '0')
         weekly_time   = request.form.get('weekly_time', '02:00')
-        monthly_day   = request.form.get('monthly_day', '1')
-        monthly_time  = request.form.get('monthly_time', '02:00')
+        
+        monthly_basis = request.form.get('monthly_basis', 'day_num')
+        if monthly_basis == 'weekday':
+            monthly_week_num = request.form.get('monthly_week_num', '1st')
+            monthly_day_of_week = request.form.get('monthly_day_of_week', 'sun')
+            monthly_day = f"{monthly_week_num} {monthly_day_of_week}"
+            monthly_time = request.form.get('monthly_time_2', '02:00')
+        else:
+            monthly_day = request.form.get('monthly_day', '1')
+            monthly_time = request.form.get('monthly_time_1', '02:00')
+            
         interval_hrs  = request.form.get('interval_hours', '24')
         label_prefix  = request.form.get('job_label', '').strip()
 

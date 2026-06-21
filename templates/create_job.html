@@ -373,15 +373,54 @@
 
           <!-- Monthly detail -->
           <div class="schedule-detail" id="detail-monthly">
-            <div class="form-row">
+            <div class="form-row" style="margin-bottom: 12px;">
+              <div class="form-group" style="margin:0; grid-column: span 2;">
+                <label class="form-label" for="monthly_basis">Monthly Schedule Type</label>
+                <select id="monthly_basis" name="monthly_basis" class="form-control" onchange="onMonthlyBasisChange(this.value)">
+                  <option value="day_num">Specific Day of Month (e.g. 1st, 15th)</option>
+                  <option value="weekday">Specific Weekday of Month (e.g. 1st Sunday, Last Saturday)</option>
+                </select>
+              </div>
+            </div>
+            
+            <div class="form-row" id="monthly_day_num_row">
               <div class="form-group" style="margin:0;">
                 <label class="form-label" for="monthly_day">Day of month (1–28)</label>
                 <input id="monthly_day" class="form-control" type="number"
                        name="monthly_day" min="1" max="28" value="1" />
               </div>
               <div class="form-group" style="margin:0;">
-                <label class="form-label" for="monthly_time">Time (24h)</label>
-                <input id="monthly_time" class="form-control" type="time" name="monthly_time" value="02:00" />
+                <label class="form-label" for="monthly_time_1">Time (24h)</label>
+                <input id="monthly_time_1" class="form-control" type="time" name="monthly_time_1" value="02:00" />
+              </div>
+            </div>
+
+            <div class="form-row" id="monthly_weekday_row" style="display:none;">
+              <div class="form-group" style="margin:0;">
+                <label class="form-label" for="monthly_week_num">Which Week</label>
+                <select id="monthly_week_num" name="monthly_week_num" class="form-control">
+                  <option value="1st">1st (First)</option>
+                  <option value="2nd">2nd (Second)</option>
+                  <option value="3rd">3rd (Third)</option>
+                  <option value="4th">4th (Fourth)</option>
+                  <option value="last">Last</option>
+                </select>
+              </div>
+              <div class="form-group" style="margin:0;">
+                <label class="form-label" for="monthly_day_of_week">Day of Week</label>
+                <select id="monthly_day_of_week" name="monthly_day_of_week" class="form-control">
+                  <option value="sun" selected>Sunday (Weekend)</option>
+                  <option value="sat">Saturday (Weekend)</option>
+                  <option value="mon">Monday</option>
+                  <option value="tue">Tuesday</option>
+                  <option value="wed">Wednesday</option>
+                  <option value="thu">Thursday</option>
+                  <option value="fri">Friday</option>
+                </select>
+              </div>
+              <div class="form-group" style="margin:0; grid-column: span 2; margin-top: 12px;">
+                <label class="form-label" for="monthly_time_2">Time (24h)</label>
+                <input id="monthly_time_2" class="form-control" type="time" name="monthly_time_2" value="02:00" />
               </div>
             </div>
           </div>
@@ -576,6 +615,18 @@
       input.value = input.value || '7';
       document.querySelector('label[for="retention_value"]').textContent = 'Number of days (N)';
       hint.textContent = 'Backups older than N days will be deleted automatically.';
+    }
+  }
+
+  function onMonthlyBasisChange(val) {
+    const dayNumRow = document.getElementById('monthly_day_num_row');
+    const weekdayRow = document.getElementById('monthly_weekday_row');
+    if (val === 'day_num') {
+      dayNumRow.style.display = '';
+      weekdayRow.style.display = 'none';
+    } else {
+      dayNumRow.style.display = 'none';
+      weekdayRow.style.display = '';
     }
   }
 </script>
