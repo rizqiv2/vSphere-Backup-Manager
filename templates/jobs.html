@@ -146,8 +146,8 @@
           </td>
           <td>
             {% if job.schedule_type and job.schedule_type != 'now' %}
-              <span class="schedule-tag" style="margin-bottom: 4px;">
-                <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" style="margin-right: 4px;"><path d="M23 4v6h-6"/><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"/></svg>
+              <span class="schedule-tag" style="margin-bottom: 4px; display: inline-flex; align-items: center;">
+                <span style="margin-right: 4px; font-size: 11px; line-height: 1;">&#x1F4C5;&#xFE0E;</span>
                 {{ job.schedule_type|capitalize }}
               </span>
               {% if job.schedule_id %}
@@ -156,7 +156,10 @@
                 <span class="badge badge-red" style="font-size: 10px; padding: 2px 6px; display: inline-block;">Cancelled</span>
               {% endif %}
             {% else %}
-              <span class="text-muted text-small" style="display: block; margin-bottom: 4px;">One-time</span>
+              <span class="text-muted text-small" style="display: inline-flex; align-items: center; gap: 4px; margin-bottom: 4px;">
+                <span style="font-size: 11px; line-height: 1;">&#x26A1;&#xFE0E;</span>
+                One-time
+              </span>
             {% endif %}
             <div class="text-muted" style="font-size:11px; margin-top: 2px;">
               {% if job.retention_type == 'keep_count' %}
@@ -172,11 +175,15 @@
             {{ job.started_fmt }}
           </td>
           <td>
-            <div class="job-actions" style="display: flex; gap: 8px;">
-              <a href="/job/{{ job.id }}" class="btn btn-ghost btn-sm">View</a>
+            <div class="job-actions" style="display: flex; gap: 8px; align-items: center;">
+              <a href="/job/{{ job.id }}" class="btn btn-ghost btn-sm">
+                <span style="margin-right: 4px; font-size: 12px; line-height: 1;">&#x1F441;&#xFE0E;</span>View
+              </a>
               {% if job.status != 'running' and job.status != 'queued' %}
               <form method="post" action="/job/{{ job.id }}/run" style="margin: 0;">
-                <button class="btn btn-primary btn-sm" type="submit">Run Now</button>
+                <button class="btn btn-primary btn-sm" type="submit">
+                  <span style="margin-right: 4px; font-size: 11px; line-height: 1;">&#x25B6;&#xFE0E;</span>Run Now
+                </button>
               </form>
               {% endif %}
               {% if job.status == 'running' or job.status == 'queued' %}
