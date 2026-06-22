@@ -18,9 +18,9 @@ echo "=========================================="
 echo ""
 
 # ── 1. Install system packages ────────────────────────────────────────────────
-echo "[1/6] Installing Nginx (forcing IPv4 to avoid IPv6 timeouts)..."
-sudo apt-get -o Acquire::ForceIPv4=true update
-sudo apt-get -o Acquire::ForceIPv4=true install -y nginx
+echo "[1/6] Installing Nginx..."
+sudo apt update
+sudo apt install -y nginx
 
 # ── 2. Install Python packages ────────────────────────────────────────────────
 echo "[2/6] Installing Python dependencies (including gunicorn)..."
