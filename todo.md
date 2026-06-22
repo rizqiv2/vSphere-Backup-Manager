@@ -266,3 +266,5 @@ graph LR
 | **Phase 3** | 3.1 (CBT)       | ~1 week  | Game-changer: 90% less bandwidth      |
 | **Phase 4** | 4.1 + 4.2 + 4.3 | ~1 week  | Enterprise security & compliance      |
 | **Phase 5** | 6.2 + 5.4 + 5.2 | ~2 weeks | Full DR capability                    |
+
+notification with timeout (in case its failed the snapshot is not cleaned)

@@ -216,6 +216,20 @@ def find_snapshot_by_name(snapshots, name):
     return None
 
 
+def find_backup_snapshots(snapshots):
+    found = []
+    for snap in snapshots:
+        is_backup = (
+            (snap.name and (snap.name.startswith("backup-") or snap.name.startswith("cbt-activate-"))) or
+            (snap.description and "backup snapshot" in snap.description.lower())
+        )
+        if is_backup:
+            found.append(snap)
+        if snap.childSnapshotList:
+            found.extend(find_backup_snapshots(snap.childSnapshotList))
+    return found
+
+
 def remove_snapshot(snapshot_obj):
     print("Removing snapshot")
     max_retries = 3
@@ -613,6 +627,49 @@ def _run_backup_impl(host, user, password, vm_name, dest, compress, no_verify_ss
         if not vm:
             raise Exception(f"VM named {vm_name} not found")
 
+        # ── Pre-flight check: consolidation check & orphaned snapshots cleanup ──
+        _prog('snapshot', 0, 'Pre-flight check: checking VM disk state…')
+        runtime = getattr(vm, 'runtime', None)
+        if runtime and getattr(runtime, 'consolidationNeeded', False):
+            print("Pre-flight: VM runtime indicates disk consolidation is needed. Consolidating...")
+            try:
+                task = vm.ConsolidateVMDisks_Task()
+                wait_for_task(task, 'ConsolidateVMDisks')
+                print("Pre-flight: Consolidation complete.")
+            except Exception as ce:
+                print(f"Pre-flight WARNING: VM disk consolidation failed: {ce}")
+
+        # Check snapshot tree for orphaned backup snapshots
+        snap_root = getattr(vm, 'snapshot', None)
+        if snap_root and snap_root.rootSnapshotList:
+            orphaned_snaps = find_backup_snapshots(snap_root.rootSnapshotList)
+            if orphaned_snaps:
+                print(f"Pre-flight: Found {len(orphaned_snaps)} orphaned backup snapshot(s). Cleaning up...")
+                for snap_tree in orphaned_snaps:
+                    print(f"Pre-flight: Removing orphaned snapshot '{snap_tree.name}'")
+                    try:
+                        remove_snapshot(snap_tree.snapshot)
+                    except Exception as e:
+                        print(f"Pre-flight ERROR: Failed to remove orphaned snapshot '{snap_tree.name}': {e}")
+                        # Attempt consolidation before aborting
+                        try:
+                            print("Pre-flight: Triggering VM disk consolidation...")
+                            task = vm.ConsolidateVMDisks_Task()
+                            wait_for_task(task, 'ConsolidateVMDisks')
+                            print("Pre-flight: Consolidation complete.")
+                        except Exception as ce:
+                            print(f"Pre-flight: Consolidation failed: {ce}")
+                        raise Exception(f"Abort backup: VM has orphaned snapshot '{snap_tree.name}' which could not be deleted.")
+                
+                # Consolidate after deleting all old snapshots to merge deltas
+                try:
+                    print("Pre-flight: Triggering VM disk consolidation...")
+                    task = vm.ConsolidateVMDisks_Task()
+                    wait_for_task(task, 'ConsolidateVMDisks')
+                    print("Pre-flight: Consolidation complete.")
+                except Exception as ce:
+                    print(f"Pre-flight: Consolidation failed: {ce}")
+
         snap_name = f"backup-{int(time.time())}"
         created_snapshot = False
 
@@ -959,8 +1016,16 @@ def _run_backup_impl(host, user, password, vm_name, dest, compress, no_verify_ss
                             print('Snapshot already removed or not found in tree')
                     else:
                         print('No snapshots found on VM — may have already been removed')
+
+                    # Post-flight check: consolidate if needed after removing snapshot
+                    runtime = getattr(target_vm, 'runtime', None)
+                    if runtime and getattr(runtime, 'consolidationNeeded', False):
+                        print("Post-flight: VM runtime indicates disk consolidation is needed. Consolidating...")
+                        task = target_vm.ConsolidateVMDisks_Task()
+                        wait_for_task(task, 'ConsolidateVMDisks')
+                        print("Post-flight consolidation complete.")
                 except Exception as e:
-                    print(f'Failed to remove snapshot: {e}', file=sys.stderr)
+                    print(f'Failed to remove snapshot or consolidate disks: {e}', file=sys.stderr)
         _prog('done', 100, 'Backup finished successfully')
     finally:
         if si:
