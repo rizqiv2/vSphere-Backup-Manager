@@ -5,7 +5,8 @@ module.exports = {
       // Gunicorn inside the virtualenv as the production WSGI server
       script: './venv/bin/gunicorn',
       args: [
-        '--workers', '4',
+        '--workers', '1',
+        '--threads', '4',
         '--bind', '127.0.0.1:5000',
         '--timeout', '300',          // long timeout for backup operations
         '--keep-alive', '5',
