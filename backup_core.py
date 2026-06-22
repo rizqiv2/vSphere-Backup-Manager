@@ -506,7 +506,8 @@ def verify_backup_checksums(dest_dir):
 def maybe_compress(path):
     try:
         import subprocess
-        rc = subprocess.run(['zstd', '-19', path], check=False)
+        # Use level 3 (default), multi-threaded compression (threads=0), and delete original file on success (--rm)
+        rc = subprocess.run(['zstd', '-3', '--threads=0', '--rm', path], check=False)
         if rc.returncode == 0:
             return path + '.zst'
     except FileNotFoundError:
@@ -515,11 +516,18 @@ def maybe_compress(path):
         import zstandard as zstd
         out_path = path + '.zst'
         with open(path, 'rb') as ifh, open(out_path, 'wb') as ofh:
-            cctx = zstd.ZstdCompressor(level=19)
+            # Use level 3, multi-threaded compression (threads=0 uses all cores)
+            cctx = zstd.ZstdCompressor(level=3, threads=0)
             cctx.copy_stream(ifh, ofh)
+        # Delete original file on success to save local storage space
+        try:
+            os.remove(path)
+            print(f"Removed original file after compression: {path}")
+        except Exception as e:
+            print(f"Warning: Failed to remove original file {path} after compression: {e}")
         return out_path
-    except Exception:
-        print('Compression not available; skipping')
+    except Exception as e:
+        print(f'Compression not available; skipping: {e}')
         return path
 
 
