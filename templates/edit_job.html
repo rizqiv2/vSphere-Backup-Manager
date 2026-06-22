@@ -1,0 +1,569 @@
+{% extends "base.html" %}
+{% set active_page = 'jobs' %}
+{% block title %}Edit Job — {{ job.label or ('Job #' + job.id[:8]) }}{% endblock %}
+
+{% block head %}
+<style>
+  .edit-container {
+    max-width: 800px; margin: 0 auto; padding-bottom: 60px;
+  }
+  .section-card {
+    background: var(--bg-card);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    margin-bottom: 24px;
+    box-shadow: var(--shadow);
+    backdrop-filter: blur(8px);
+    overflow: hidden;
+  }
+  .section-card-header {
+    background: rgba(255,255,255,0.02);
+    border-bottom: 1px solid var(--border);
+    padding: 16px 24px;
+    font-weight: 700;
+    font-size: 15px;
+    letter-spacing: -0.01em;
+    display: flex;
+    align-items: center;
+  }
+  .section-card-body {
+    padding: 24px;
+  }
+  .form-group {
+    margin-bottom: 20px;
+  }
+  .form-group:last-child {
+    margin-bottom: 0;
+  }
+  .form-label {
+    display: block;
+    font-size: 12px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    color: var(--text-secondary);
+    margin-bottom: 8px;
+  }
+  .form-control {
+    width: 100%;
+    background: rgba(0,0,0,0.2);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+    padding: 10px 14px;
+    color: var(--text);
+    font-size: 14px;
+    transition: all 0.2s;
+  }
+  .form-control:focus {
+    outline: none;
+    border-color: var(--accent);
+    box-shadow: 0 0 0 3px rgba(6, 182, 212, 0.15);
+  }
+  .form-row {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 16px;
+  }
+
+  .strategy-options, .schedule-options {
+    display: grid;
+    grid-template-columns: 1fr;
+    gap: 12px;
+  }
+  @media(min-width: 600px) {
+    .strategy-options { grid-template-columns: 1fr 1fr; }
+    .schedule-options { grid-template-columns: repeat(5, 1fr); }
+  }
+
+  .strategy-opt, .schedule-opt {
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+    padding: 16px;
+    cursor: pointer;
+    transition: all 0.2s;
+    background: rgba(255,255,255,0.01);
+    position: relative;
+    display: flex;
+    gap: 12px;
+    align-items: flex-start;
+  }
+  .schedule-opt {
+    flex-direction: column;
+    align-items: center;
+    text-align: center;
+    padding: 14px 10px;
+    gap: 6px;
+  }
+  .strategy-opt:hover, .schedule-opt:hover {
+    border-color: rgba(6, 182, 212, 0.4);
+    background: rgba(6, 182, 212, 0.02);
+  }
+  .strategy-opt.selected, .schedule-opt.selected {
+    border-color: var(--accent);
+    background: rgba(6, 182, 212, 0.05);
+    box-shadow: 0 0 0 1px var(--accent);
+  }
+  .strategy-opt input, .schedule-opt input {
+    position: absolute;
+    opacity: 0;
+    cursor: pointer;
+  }
+  .strategy-opt-icon {
+    font-size: 24px;
+    line-height: 1;
+  }
+  .strategy-opt-title {
+    font-weight: 700;
+    font-size: 14px;
+    margin-bottom: 4px;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+  }
+  .strategy-opt-desc {
+    font-size: 12px;
+    color: var(--text-muted);
+    line-height: 1.4;
+  }
+  .strategy-badge {
+    font-size: 9px;
+    text-transform: uppercase;
+    font-weight: 800;
+    letter-spacing: 0.05em;
+    padding: 2px 6px;
+    border-radius: 4px;
+    color: #fff;
+  }
+
+  .schedule-opt-icon { font-size: 18px; margin-bottom: 2px; }
+  .schedule-opt-title { font-weight: 700; font-size: 12px; }
+  .schedule-opt-desc { font-size: 10px; color: var(--text-muted); line-height: 1.3; }
+
+  .schedule-detail {
+    display: none;
+    border-top: 1px dashed var(--border);
+    margin-top: 16px;
+    padding-top: 16px;
+  }
+  .schedule-detail.visible { display: block; }
+
+  .cbt-savings-banner {
+    display: none;
+    background: rgba(6, 182, 212, 0.05);
+    border: 1px solid rgba(6, 182, 212, 0.15);
+    border-radius: var(--radius-sm);
+    padding: 12px 16px;
+    margin-top: 14px;
+    font-size: 12.5px;
+    color: var(--text-secondary);
+    line-height: 1.5;
+  }
+  .cbt-savings-banner.visible { display: block; }
+
+  .action-bar {
+    display: flex; gap: 12px; justify-content: flex-end; margin-top: 8px;
+  }
+
+  .nfs-targets {
+    background: rgba(0,0,0,0.1);
+    border: 1px dashed var(--border);
+    border-radius: var(--radius-sm);
+    padding: 14px;
+    margin-top: 12px;
+  }
+  .nfs-mount-list {
+    display: flex; gap: 8px; flex-wrap: wrap; margin-top: 8px;
+  }
+</style>
+{% endblock %}
+
+{% block content %}
+<div class="topbar">
+  <div>
+    <div class="topbar-title">Edit Backup Job</div>
+    <div class="topbar-subtitle">Modify configuration and schedule for job details</div>
+  </div>
+  <div class="topbar-actions">
+    <a href="/job/{{ job.id }}" class="btn btn-ghost btn-sm">Back to Details</a>
+  </div>
+</div>
+
+<div class="content">
+  <div class="edit-container">
+    <form id="jobForm" method="post">
+      <!-- Target VM (Static Text) -->
+      <div class="section-card">
+        <div class="section-card-header">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="vertical-align: middle; margin-right: 6px;"><rect x="2" y="2" width="20" height="20" rx="2.18" ry="2.18"/><line x1="7" y1="2" x2="7" y2="22"/><line x1="17" y1="2" x2="17" y2="22"/><line x1="2" y1="12" x2="22" y2="12"/><line x1="2" y1="7" x2="7" y2="7"/><line x1="2" y1="17" x2="7" y2="17"/><line x1="17" y1="17" x2="22" y2="17"/><line x1="17" y1="7" x2="22" y2="7"/></svg>
+          Target Virtual Machine
+        </div>
+        <div class="section-card-body" style="background: rgba(255,255,255,0.01);">
+          <div style="display:flex; align-items:center; justify-content:space-between;">
+            <div>
+              <div style="font-weight:700; font-size:16px; color:var(--accent);">{{ job.vm_name }}</div>
+              <div class="text-small text-muted" style="margin-top:4px;">Disks target: {% if job.disks_count %}{{ job.disks_count }} selected disk(s){% else %}All disks{% endif %}</div>
+            </div>
+            <span class="badge badge-purple">Locked Parameter</span>
+          </div>
+        </div>
+      </div>
+
+      <!-- Basic Config -->
+      <div class="section-card">
+        <div class="section-card-header">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="vertical-align: middle; margin-right: 6px;"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
+          Configuration Details
+        </div>
+        <div class="section-card-body">
+          <div class="form-group">
+            <label class="form-label" for="job_label">Job label</label>
+            <input id="job_label" class="form-control" type="text" name="job_label" value="{{ job.label }}" placeholder="e.g. Nightly backup" />
+          </div>
+
+          <div class="form-group">
+            <label class="form-label" for="dest">Backup Destination Directory</label>
+            <input id="dest" class="form-control" type="text" name="dest" value="{{ job.dest }}" placeholder="/mnt/backups" required />
+            
+            <div class="nfs-targets" id="nfsTargets" style="display:none;">
+              <div style="font-size:11px;font-weight:700;color:var(--text-secondary);text-transform:uppercase;">Quick-Select NFS Mount Target</div>
+              <div class="nfs-mount-list" id="nfsMountList"></div>
+            </div>
+          </div>
+
+          <div style="display:flex; gap:20px; flex-wrap:wrap; margin-top:16px;">
+            <label style="display:flex; align-items:center; gap:8px; font-size:13.5px; cursor:pointer;">
+              <input type="checkbox" name="compress" {% if job.compress %}checked{% endif %} style="width:18px;height:18px;accent-color:var(--accent);" />
+              Compress downloaded backup files (zstd)
+            </label>
+            <label style="display:flex; align-items:center; gap:8px; font-size:13.5px; cursor:pointer;">
+              <input type="checkbox" name="no_verify_ssl" {% if raw_job.no_verify_ssl %}checked{% endif %} style="width:18px;height:18px;accent-color:var(--accent);" />
+              Skip SSL certificate verification
+            </label>
+          </div>
+        </div>
+      </div>
+
+      <!-- Backup Strategy -->
+      <div class="section-card">
+        <div class="section-card-header">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="vertical-align: middle; margin-right: 6px;"><polyline points="23 4 23 10 17 10"/><polyline points="1 20 1 14 7 14"/><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/></svg>
+          Backup Strategy
+        </div>
+        <div class="section-card-body">
+          <div class="strategy-options">
+            <label class="strategy-opt {% if not job.use_cbt %}selected{% endif %}" id="strat-full" onclick="selectStrategy('full')">
+              <input type="radio" name="use_cbt" value="" {% if not job.use_cbt %}checked{% endif %} id="strat_radio_full" />
+              <div class="strategy-opt-icon">💾</div>
+              <div>
+                <div class="strategy-opt-title">
+                  Full Backup
+                  <span class="strategy-badge" style="background: linear-gradient(135deg, #10b981, #059669);">Recommended</span>
+                </div>
+                <div class="strategy-opt-desc">Download the entire virtual disk file every run. Robust, complete, and doesn't require prior states.</div>
+              </div>
+            </label>
+
+            <label class="strategy-opt {% if job.use_cbt %}selected{% endif %}" id="strat-incremental" onclick="selectStrategy('incremental')">
+              <input type="radio" name="use_cbt" value="1" {% if job.use_cbt %}checked{% endif %} id="strat_radio_incremental" />
+              <div class="strategy-opt-icon">⚡</div>
+              <div>
+                <div class="strategy-opt-title">Incremental (CBT)</div>
+                <div class="strategy-opt-desc">Download only changed disk sectors using VMware Changed Block Tracking. Saves storage space.</div>
+              </div>
+            </label>
+          </div>
+
+          <div class="cbt-savings-banner {% if job.use_cbt %}visible{% endif %}" id="cbtBanner">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="vertical-align:middle;margin-right:6px;color:var(--accent);"><path d="M13 2L3 14h9l-1 8 10-12h-9l1-8z"/></svg>
+            <strong>80–99% transfer bandwidth savings on recurring runs.</strong>
+            The first run triggers a full backup to seed state. Subsequent runs download only modified blocks since the last successful snapshot.
+          </div>
+        </div>
+      </div>
+
+      <!-- Retention Policy -->
+      <div class="section-card">
+        <div class="section-card-header">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="vertical-align: middle; margin-right: 6px;"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg>
+          Retention Policy
+        </div>
+        <div class="section-card-body">
+          <div class="form-row">
+            <div class="form-group" style="margin:0;">
+              <label class="form-label" for="retention_type">Backups to keep</label>
+              <select id="retention_type" name="retention_type" class="form-control" onchange="onRetentionChange(this.value)">
+                <option value="keep_all" {% if job.retention_type == 'keep_all' %}selected{% endif %}>Keep all backups (No automatic deletion)</option>
+                <option value="keep_count" {% if job.retention_type == 'keep_count' %}selected{% endif %}>Keep latest N backups (Count based)</option>
+                <option value="keep_days" {% if job.retention_type == 'keep_days' %}selected{% endif %}>Keep backups for N days (Age based)</option>
+              </select>
+            </div>
+            <div class="form-group" id="retention_val_group" style="margin:0; {% if job.retention_type == 'keep_all' %}display:none;{% endif %}">
+              <label class="form-label" for="retention_value">Number of backups (N)</label>
+              <input id="retention_value" class="form-control" type="number" name="retention_value" value="{{ job.retention_value }}" min="1" max="1000" />
+            </div>
+          </div>
+          <div style="font-size:12px;color:var(--text-muted);margin-top:10px;" id="retention_hint">
+            {% if job.retention_type == 'keep_count' %}
+              Only the latest {{ job.retention_value }} successful backups will be kept. Older ones will be deleted automatically.
+            {% elif job.retention_type == 'keep_days' %}
+              Backups older than {{ job.retention_value }} days will be deleted automatically.
+            {% else %}
+              All successful backup copies will be preserved indefinitely.
+            {% endif %}
+          </div>
+        </div>
+      </div>
+
+      <!-- Schedule -->
+      <div class="section-card">
+        <div class="section-card-header">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="vertical-align: middle; margin-right: 6px;"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
+          Schedule
+        </div>
+        <div class="section-card-body">
+          <div class="schedule-options">
+            <label class="schedule-opt {% if job.schedule_type == 'now' %}selected{% endif %}" id="opt-now" onclick="selectSchedule('now')">
+              <input type="radio" name="schedule_type" value="now" {% if job.schedule_type == 'now' %}checked{% endif %} />
+              <div>
+                <div class="schedule-opt-icon">⚡</div>
+                <div class="schedule-opt-title">Run Now</div>
+                <div class="schedule-opt-desc">Disable schedule (run manually only)</div>
+              </div>
+            </label>
+
+            <label class="schedule-opt {% if job.schedule_type == 'daily' %}selected{% endif %}" id="opt-daily" onclick="selectSchedule('daily')">
+              <input type="radio" name="schedule_type" value="daily" {% if job.schedule_type == 'daily' %}checked{% endif %} />
+              <div>
+                <div class="schedule-opt-icon">📅</div>
+                <div class="schedule-opt-title">Daily</div>
+                <div class="schedule-opt-desc">Repeat every day at a set time</div>
+              </div>
+            </label>
+
+            <label class="schedule-opt {% if job.schedule_type == 'weekly' %}selected{% endif %}" id="opt-weekly" onclick="selectSchedule('weekly')">
+              <input type="radio" name="schedule_type" value="weekly" {% if job.schedule_type == 'weekly' %}checked{% endif %} />
+              <div>
+                <div class="schedule-opt-icon">🗓️</div>
+                <div class="schedule-opt-title">Weekly</div>
+                <div class="schedule-opt-desc">Repeat every week on a specific day</div>
+              </div>
+            </label>
+
+            <label class="schedule-opt {% if job.schedule_type == 'interval' %}selected{% endif %}" id="opt-interval" onclick="selectSchedule('interval')">
+              <input type="radio" name="schedule_type" value="interval" {% if job.schedule_type == 'interval' %}checked{% endif %} />
+              <div>
+                <div class="schedule-opt-icon">🔄</div>
+                <div class="schedule-opt-title">Interval</div>
+                <div class="schedule-opt-desc">Repeat every N hours</div>
+              </div>
+            </label>
+
+            <label class="schedule-opt {% if job.schedule_type == 'monthly' %}selected{% endif %}" id="opt-monthly" onclick="selectSchedule('monthly')">
+              <input type="radio" name="schedule_type" value="monthly" {% if job.schedule_type == 'monthly' %}checked{% endif %} />
+              <div>
+                <div class="schedule-opt-icon">📆</div>
+                <div class="schedule-opt-title">Monthly</div>
+                <div class="schedule-opt-desc">Specific day each month</div>
+              </div>
+            </label>
+          </div>
+
+          <!-- Daily detail -->
+          <div class="schedule-detail {% if job.schedule_type == 'daily' %}visible{% endif %}" id="detail-daily">
+            <div class="form-row">
+              <div class="form-group" style="margin:0;">
+                <label class="form-label" for="daily_time">Time (24h)</label>
+                <input id="daily_time" class="form-control" type="time" name="daily_time" value="{% if job.schedule_type == 'daily' %}{{ job.schedule_time }}{% else %}02:00{% endif %}" />
+              </div>
+            </div>
+          </div>
+
+          <!-- Weekly detail -->
+          <div class="schedule-detail {% if job.schedule_type == 'weekly' %}visible{% endif %}" id="detail-weekly">
+            <div class="form-row">
+              <div class="form-group" style="margin:0;">
+                <label class="form-label" for="weekly_day">Day of Week</label>
+                <select id="weekly_day" class="form-control" name="weekly_day">
+                  <option value="0" {% if raw_job.weekly_day == '0' %}selected{% endif %}>Monday</option>
+                  <option value="1" {% if raw_job.weekly_day == '1' %}selected{% endif %}>Tuesday</option>
+                  <option value="2" {% if raw_job.weekly_day == '2' %}selected{% endif %}>Wednesday</option>
+                  <option value="3" {% if raw_job.weekly_day == '3' %}selected{% endif %}>Thursday</option>
+                  <option value="4" {% if raw_job.weekly_day == '4' %}selected{% endif %}>Friday</option>
+                  <option value="5" {% if raw_job.weekly_day == '5' %}selected{% endif %}>Saturday</option>
+                  <option value="6" {% if raw_job.weekly_day == '6' %}selected{% endif %}>Sunday</option>
+                </select>
+              </div>
+              <div class="form-group" style="margin:0;">
+                <label class="form-label" for="weekly_time">Time (24h)</label>
+                <input id="weekly_time" class="form-control" type="time" name="weekly_time" value="{% if job.schedule_type == 'weekly' %}{{ job.schedule_time }}{% else %}02:00{% endif %}" />
+              </div>
+            </div>
+          </div>
+
+          <!-- Interval detail -->
+          <div class="schedule-detail {% if job.schedule_type == 'interval' %}visible{% endif %}" id="detail-interval">
+            <div class="form-row">
+              <div class="form-group" style="margin:0;">
+                <label class="form-label" for="interval_hours">Every (hours)</label>
+                <input id="interval_hours" class="form-control" type="number" name="interval_hours" value="{{ raw_job.interval_hours or 24 }}" min="1" max="8760" />
+              </div>
+            </div>
+          </div>
+
+          <!-- Monthly detail -->
+          {% set is_weekday = ' ' in (raw_job.monthly_day|string) %}
+          {% set day_str = raw_job.monthly_day|string %}
+          {% set week_num_val = day_str.split(' ')[0] if is_weekday else '1st' %}
+          {% set dow_val = day_str.split(' ')[1] if is_weekday else 'sun' %}
+          <div class="schedule-detail {% if job.schedule_type == 'monthly' %}visible{% endif %}" id="detail-monthly">
+            <div class="form-row" style="margin-bottom: 12px;">
+              <div class="form-group" style="margin:0; grid-column: span 2;">
+                <label class="form-label" for="monthly_basis">Monthly Schedule Type</label>
+                <select id="monthly_basis" name="monthly_basis" class="form-control" onchange="onMonthlyBasisChange(this.value)">
+                  <option value="day_num" {% if not is_weekday %}selected{% endif %}>Specific Day of Month (e.g. 1st, 15th)</option>
+                  <option value="weekday" {% if is_weekday %}selected{% endif %}>Specific Weekday of Month (e.g. 4th Sunday)</option>
+                </select>
+              </div>
+            </div>
+            
+            <div class="form-row" id="monthly_day_num_row" style="{% if is_weekday %}display:none;{% endif %}">
+              <div class="form-group" style="margin:0;">
+                <label class="form-label" for="monthly_day">Day of month (1–28)</label>
+                <input id="monthly_day" class="form-control" type="number" name="monthly_day" min="1" max="28" value="{% if not is_weekday %}{{ raw_job.monthly_day or 1 }}{% else %}1{% endif %}" />
+              </div>
+              <div class="form-group" style="margin:0;">
+                <label class="form-label" for="monthly_time_1">Time (24h)</label>
+                <input id="monthly_time_1" class="form-control" type="time" name="monthly_time_1" value="{% if job.schedule_type == 'monthly' and not is_weekday %}{{ job.schedule_time }}{% else %}02:00{% endif %}" />
+              </div>
+            </div>
+
+            <div class="form-row" id="monthly_weekday_row" style="{% if not is_weekday %}display:none;{% endif %}">
+              <div class="form-group" style="margin:0;">
+                <label class="form-label" for="monthly_week_num">Which Week</label>
+                <select id="monthly_week_num" name="monthly_week_num" class="form-control">
+                  <option value="1st" {% if week_num_val == '1st' %}selected{% endif %}>1st (First)</option>
+                  <option value="2nd" {% if week_num_val == '2nd' %}selected{% endif %}>2nd (Second)</option>
+                  <option value="3rd" {% if week_num_val == '3rd' %}selected{% endif %}>3rd (Third)</option>
+                  <option value="4th" {% if week_num_val == '4th' %}selected{% endif %}>4th (Fourth)</option>
+                  <option value="last" {% if week_num_val == 'last' %}selected{% endif %}>Last</option>
+                </select>
+              </div>
+              <div class="form-group" style="margin:0;">
+                <label class="form-label" for="monthly_day_of_week">Day of Week</label>
+                <select id="monthly_day_of_week" name="monthly_day_of_week" class="form-control">
+                  <option value="sun" {% if dow_val == 'sun' %}selected{% endif %}>Sunday (Weekend)</option>
+                  <option value="sat" {% if dow_val == 'sat' %}selected{% endif %}>Saturday (Weekend)</option>
+                  <option value="mon" {% if dow_val == 'mon' %}selected{% endif %}>Monday</option>
+                  <option value="tue" {% if dow_val == 'tue' %}selected{% endif %}>Tuesday</option>
+                  <option value="wed" {% if dow_val == 'wed' %}selected{% endif %}>Wednesday</option>
+                  <option value="thu" {% if dow_val == 'thu' %}selected{% endif %}>Thursday</option>
+                  <option value="fri" {% if dow_val == 'fri' %}selected{% endif %}>Friday</option>
+                </select>
+              </div>
+              <div class="form-group" style="margin:0; grid-column: span 2; margin-top: 12px;">
+                <label class="form-label" for="monthly_time_2">Time (24h)</label>
+                <input id="monthly_time_2" class="form-control" type="time" name="monthly_time_2" value="{% if job.schedule_type == 'monthly' and is_weekday %}{{ job.schedule_time }}{% else %}02:00{% endif %}" />
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div class="action-bar">
+        <button type="submit" id="submitBtn" class="btn btn-primary">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" style="margin-right: 6px; vertical-align: middle;"><polyline points="20 6 9 17 4 12"/></svg>
+          Save Changes
+        </button>
+        <a href="/job/{{ job.id }}" class="btn btn-ghost">Cancel</a>
+      </div>
+    </form>
+  </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+  function selectSchedule(type) {
+    ['now','daily','weekly','monthly','interval'].forEach(t => {
+      document.getElementById('opt-' + t).classList.remove('selected');
+      const d = document.getElementById('detail-' + t);
+      if (d) d.classList.remove('visible');
+    });
+    document.getElementById('opt-' + type).classList.add('selected');
+    document.getElementById('opt-' + type).querySelector('input').checked = true;
+    const detail = document.getElementById('detail-' + type);
+    if (detail) detail.classList.add('visible');
+  }
+
+  function selectStrategy(type) {
+    document.getElementById('strat-full').classList.remove('selected');
+    document.getElementById('strat-incremental').classList.remove('selected');
+    document.getElementById('strat-' + type).classList.add('selected');
+    document.getElementById('strat_radio_' + type).checked = true;
+    const banner = document.getElementById('cbtBanner');
+    if (type === 'incremental') {
+      banner.classList.add('visible');
+    } else {
+      banner.classList.remove('visible');
+    }
+  }
+
+  // Load NFS mounts for quick-select
+  fetch('/api/nfs')
+    .then(r => r.json())
+    .then(mounts => {
+      if (!mounts || !mounts.length) return;
+      const wrap = document.getElementById('nfsTargets');
+      const list = document.getElementById('nfsMountList');
+      mounts.forEach(m => {
+        const btn = document.createElement('button');
+        btn.type = 'button';
+        btn.className = 'btn btn-secondary btn-sm';
+        btn.innerHTML = `<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="margin-right: 6px; vertical-align: middle;"><rect x="2" y="2" width="20" height="8" rx="2" ry="2"/><rect x="2" y="14" width="20" height="8" rx="2" ry="2"/><line x1="6" y1="6" x2="6.01" y2="6"/><line x1="6" y1="18" x2="6.01" y2="18"/></svg> ${m.mountpoint} <span style="color:var(--text-muted);font-size:11px;margin-left:4px;">${m.free_gb}GB free</span>`;
+        btn.onclick = () => {
+          document.getElementById('dest').value = m.mountpoint;
+          list.querySelectorAll('button').forEach(b => b.style.borderColor = '');
+          btn.style.borderColor = 'var(--accent)';
+        };
+        list.appendChild(btn);
+      });
+      wrap.style.display = '';
+    })
+    .catch(() => {});
+
+  function onRetentionChange(val) {
+    const valGroup = document.getElementById('retention_val_group');
+    const hint = document.getElementById('retention_hint');
+    const input = document.getElementById('retention_value');
+    
+    if (val === 'keep_all') {
+      valGroup.style.display = 'none';
+      hint.textContent = 'All successful backup copies will be preserved indefinitely.';
+    } else if (val === 'keep_count') {
+      valGroup.style.display = '';
+      input.min = '1';
+      input.value = input.value || '5';
+      document.querySelector('label[for="retention_value"]').textContent = 'Number of backups (N)';
+      hint.textContent = 'Only the latest N successful backups will be kept. Older ones will be deleted automatically.';
+    } else if (val === 'keep_days') {
+      valGroup.style.display = '';
+      input.min = '1';
+      input.value = input.value || '7';
+      document.querySelector('label[for="retention_value"]').textContent = 'Number of days (N)';
+      hint.textContent = 'Backups older than N days will be deleted automatically.';
+    }
+  }
+
+  function onMonthlyBasisChange(val) {
+    const dayNumRow = document.getElementById('monthly_day_num_row');
+    const weekdayRow = document.getElementById('monthly_weekday_row');
+    if (val === 'day_num') {
+      dayNumRow.style.display = '';
+      weekdayRow.style.display = 'none';
+    } else {
+      dayNumRow.style.display = 'none';
+      weekdayRow.style.display = '';
+    }
+  }
+</script>
+{% endblock %}

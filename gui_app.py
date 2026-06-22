@@ -1249,6 +1249,98 @@ def delete_job(jobid):
     return redirect(url_for('list_jobs'))
 
 
+@app.route('/job/<jobid>/edit', methods=['GET', 'POST'])
+@login_required
+def edit_job(jobid):
+    with jobs_db_lock:
+        info = jobs.get(jobid)
+        if not info:
+            abort(404)
+        if info.get('status') in ('running', 'queued'):
+            flash('Cannot edit a running or queued job.', 'danger')
+            return redirect(url_for('job_detail', jobid=jobid))
+
+        if request.method == 'POST':
+            dest          = request.form.get('dest', './backups').strip()
+            compress      = 'compress' in request.form
+            no_verify_ssl = 'no_verify_ssl' in request.form
+            schedule_type = request.form.get('schedule_type', 'now')
+            daily_time    = request.form.get('daily_time', '02:00')
+            weekly_day    = request.form.get('weekly_day', '0')
+            weekly_time   = request.form.get('weekly_time', '02:00')
+
+            monthly_basis = request.form.get('monthly_basis', 'day_num')
+            if monthly_basis == 'weekday':
+                monthly_week_num = request.form.get('monthly_week_num', '1st')
+                monthly_day_of_week = request.form.get('monthly_day_of_week', 'sun')
+                monthly_day = f"{monthly_week_num} {monthly_day_of_week}"
+                monthly_time = request.form.get('monthly_time_2', '02:00')
+            else:
+                monthly_day = request.form.get('monthly_day', '1')
+                monthly_time = request.form.get('monthly_time_1', '02:00')
+
+            interval_hrs  = request.form.get('interval_hours', '24')
+            label         = request.form.get('job_label', '').strip()
+
+            if schedule_type == 'daily':
+                sched_time = daily_time
+            elif schedule_type == 'weekly':
+                sched_time = weekly_time
+            elif schedule_type == 'monthly':
+                sched_time = monthly_time
+            else:
+                sched_time = ''
+
+            try:
+                retention_value = int(request.form.get('retention_value', '5'))
+            except ValueError:
+                retention_value = 5
+            retention_type = request.form.get('retention_type', 'keep_all')
+            use_cbt = request.form.get('use_cbt') == '1'
+
+            # Cancel old schedule if exists
+            old_sched_id = info.get('schedule_id')
+            if old_sched_id and scheduler:
+                try:
+                    scheduler.remove_job(old_sched_id)
+                except Exception:
+                    pass
+            info['schedule_id'] = None
+
+            # Update job config
+            info['label'] = label
+            info['dest'] = dest
+            info['compress'] = compress
+            info['no_verify_ssl'] = no_verify_ssl
+            info['use_cbt'] = use_cbt
+            info['retention_type'] = retention_type
+            info['retention_value'] = retention_value
+            info['schedule_type'] = schedule_type
+            info['schedule_time'] = sched_time
+            info['weekly_day'] = weekly_day
+            info['monthly_day'] = monthly_day
+            info['interval_hours'] = interval_hrs
+
+            # Register new schedule if applicable
+            if schedule_type != 'now' and HAS_SCHEDULER:
+                new_sched_id = register_scheduler_job(info)
+                if new_sched_id:
+                    info['schedule_id'] = new_sched_id
+                    info['status'] = 'scheduled'
+                else:
+                    info['status'] = 'finished'
+            else:
+                info['status'] = 'finished' if info.get('status') == 'scheduled' else info.get('status', 'finished')
+
+            save_jobs_db()
+            flash('Job updated successfully.', 'success')
+            return redirect(url_for('job_detail', jobid=jobid))
+
+        # GET: Display edit form
+        job_disp = job_to_display(jobid, info)
+        return render_template('edit_job.html', job=job_disp, raw_job=info)
+
+
 # ── Template filter ───────────────────────────────────────────────────────────
 @app.template_filter('startswith')
 def startswith_filter(value, prefix):
