@@ -1255,6 +1255,16 @@ def startswith_filter(value, prefix):
     return str(value).startswith(prefix)
 
 
+@app.after_request
+def add_header(r):
+    """Prevent caching of dynamic pages by the browser."""
+    if not request.path.startswith('/static/'):
+        r.headers["Cache-Control"] = "no-cache, no-store, must-revalidate"
+        r.headers["Pragma"] = "no-cache"
+        r.headers["Expires"] = "0"
+    return r
+
+
 # ── NFS Management Routes ─────────────────────────────────────────────────────────
 
 @app.route('/nfs')
