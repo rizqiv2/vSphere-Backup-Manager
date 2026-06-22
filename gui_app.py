@@ -76,69 +76,79 @@ if HAS_SCHEDULER:
     scheduler = BackgroundScheduler(daemon=True)
     scheduler.start()
 
+def register_scheduler_job(info):
+    if not HAS_SCHEDULER or not scheduler:
+        return None
+
+    jid = info['id']
+    schedule_type = info.get('schedule_type')
+    schedule_time = info.get('schedule_time', '')
+    weekly_day = info.get('weekly_day', '0')
+    monthly_day = info.get('monthly_day', '1')
+    interval_hours = info.get('interval_hours', '24')
+    vm_name = info.get('vm_name')
+    vm_names = info.get('vm_names')
+    label = info.get('label', '')
+
+    trigger = None
+    if schedule_type == 'daily':
+        hour, minute = (schedule_time.split(':') + ['00'])[:2]
+        trigger = CronTrigger(hour=int(hour), minute=int(minute))
+    elif schedule_type == 'weekly':
+        hour, minute = (schedule_time.split(':') + ['00'])[:2]
+        trigger = CronTrigger(
+            day_of_week=int(weekly_day),
+            hour=int(hour), minute=int(minute)
+        )
+    elif schedule_type == 'monthly':
+        hour, minute = (schedule_time.split(':') + ['00'])[:2]
+        day_val = monthly_day
+        if str(day_val).isdigit():
+            day_val = max(1, min(28, int(day_val)))
+        trigger = CronTrigger(
+            day=day_val,
+            hour=int(hour), minute=int(minute)
+        )
+    elif schedule_type == 'interval':
+        trigger = IntervalTrigger(hours=max(1, int(interval_hours or 24)))
+
+    if trigger:
+        def make_runner(j):
+            def _runner():
+                run_job_thread(j)
+            return _runner
+
+        if vm_names:
+            sched_name = f"Backup {len(vm_names)} VMs ({label or jid[:8]})"
+        else:
+            sched_name = f"Backup {vm_name} ({label or jid[:8]})"
+
+        sched_id = f'backup-{jid}'
+        try:
+            scheduler.remove_job(sched_id)
+        except Exception:
+            pass
+
+        sched_job = scheduler.add_job(
+            make_runner(jid),
+            trigger=trigger,
+            id=sched_id,
+            name=sched_name,
+            misfire_grace_time=3600,
+            max_instances=1,
+        )
+        return sched_job.id
+    return None
+
 def reschedule_active_jobs():
     if not HAS_SCHEDULER or not scheduler:
         return
     rescheduled_count = 0
     for jid, info in list(jobs.items()):
-        if info.get('status') == 'scheduled' and info.get('schedule_id'):
+        if info.get('schedule_type') and info.get('schedule_type') != 'now' and info.get('schedule_id'):
             try:
-                # Remove first to prevent duplicates
-                try:
-                    scheduler.remove_job(info['schedule_id'])
-                except Exception:
-                    pass
-
-                trigger = None
-                schedule_type = info.get('schedule_type')
-                schedule_time = info.get('schedule_time', '')
-                weekly_day = info.get('weekly_day', '0')
-                monthly_day = info.get('monthly_day', '1')
-                interval_hours = info.get('interval_hours', '24')
-                vm_name = info.get('vm_name')
-                label = info.get('label', '')
-
-                if schedule_type == 'daily':
-                    hour, minute = (schedule_time.split(':') + ['00'])[:2]
-                    trigger = CronTrigger(hour=int(hour), minute=int(minute))
-                elif schedule_type == 'weekly':
-                    hour, minute = (schedule_time.split(':') + ['00'])[:2]
-                    trigger = CronTrigger(
-                        day_of_week=int(weekly_day),
-                        hour=int(hour), minute=int(minute)
-                    )
-                elif schedule_type == 'monthly':
-                    hour, minute = (schedule_time.split(':') + ['00'])[:2]
-                    day_val = monthly_day
-                    if str(day_val).isdigit():
-                        day_val = max(1, min(28, int(day_val)))
-                    trigger = CronTrigger(
-                        day=day_val,
-                        hour=int(hour), minute=int(minute)
-                    )
-                elif schedule_type == 'interval':
-                    trigger = IntervalTrigger(hours=max(1, int(interval_hours or 24)))
-
-                if trigger:
-                    def make_runner(j):
-                        def _runner():
-                            run_job_thread(j)
-                        return _runner
-
-                    vm_names = info.get('vm_names')
-                    if vm_names:
-                        sched_name = f"Backup {len(vm_names)} VMs ({label or jid[:8]})"
-                    else:
-                        sched_name = f"Backup {vm_name} ({label or jid[:8]})"
-
-                    scheduler.add_job(
-                        make_runner(jid),
-                        trigger=trigger,
-                        id=info['schedule_id'],
-                        name=sched_name,
-                        misfire_grace_time=3600,
-                        max_instances=1,
-                    )
+                sched_id = register_scheduler_job(info)
+                if sched_id:
                     rescheduled_count += 1
             except Exception as e:
                 print(f"ERROR: Failed to reschedule job {jid}: {e}", file=sys.stderr)
@@ -605,50 +615,9 @@ def create_and_start_job(
         t = threading.Thread(target=run_job_thread, args=(jid,), daemon=True)
         t.start()
     else:
-        # Build APScheduler trigger
-        trigger = None
-        if schedule_type == 'daily':
-            hour, minute = (schedule_time.split(':') + ['00'])[:2]
-            trigger = CronTrigger(hour=int(hour), minute=int(minute))
-        elif schedule_type == 'weekly':
-            hour, minute = (schedule_time.split(':') + ['00'])[:2]
-            trigger = CronTrigger(
-                day_of_week=int(weekly_day),
-                hour=int(hour), minute=int(minute)
-            )
-        elif schedule_type == 'monthly':
-            hour, minute = (schedule_time.split(':') + ['00'])[:2]
-            day_val = monthly_day
-            if str(day_val).isdigit():
-                day_val = max(1, min(28, int(day_val)))
-            trigger = CronTrigger(
-                day=day_val,
-                hour=int(hour), minute=int(minute)
-            )
-        elif schedule_type == 'interval':
-            trigger = IntervalTrigger(hours=max(1, int(interval_hours or 24)))
-
-        if trigger:
-            # Capture jid in closure
-            def make_runner(j):
-                def _runner():
-                    run_job_thread(j)
-                return _runner
-
-            if vm_names:
-                sched_name = f"Backup {len(vm_names)} VMs ({label or jid[:8]})"
-            else:
-                sched_name = f"Backup {vm_name} ({label or jid[:8]})"
-
-            sched_job = scheduler.add_job(
-                make_runner(jid),
-                trigger=trigger,
-                id=f'backup-{jid}',
-                name=sched_name,
-                misfire_grace_time=3600,
-                max_instances=1,
-            )
-            info['schedule_id'] = sched_job.id
+        sched_id = register_scheduler_job(info)
+        if sched_id:
+            info['schedule_id'] = sched_id
             info['status'] = 'scheduled'
         else:
             # Fallback: run now
@@ -1024,6 +993,30 @@ def cancel_schedule(jobid):
     info['status'] = info.get('status', 'finished') if info.get('status') not in ('queued', 'running') else info['status']
     save_jobs_db()
     flash('Recurring schedule cancelled.', 'success')
+    return redirect(url_for('job_detail', jobid=jobid))
+
+
+@app.route('/job/<jobid>/reactivate-schedule', methods=['POST'])
+@login_required
+def reactivate_schedule(jobid):
+    info = jobs.get(jobid)
+    if not info:
+        abort(404)
+    if not info.get('schedule_type') or info.get('schedule_type') == 'now':
+        flash('This job does not have a recurring schedule configured.', 'danger')
+        return redirect(url_for('job_detail', jobid=jobid))
+    if info.get('schedule_id'):
+        flash('Schedule is already active.', 'warning')
+        return redirect(url_for('job_detail', jobid=jobid))
+    sched_id = register_scheduler_job(info)
+    if sched_id:
+        info['schedule_id'] = sched_id
+        if info.get('status') not in ('running', 'queued'):
+            info['status'] = 'scheduled'
+        save_jobs_db()
+        flash('Recurring schedule reactivated successfully.', 'success')
+    else:
+        flash('Failed to reactivate schedule.', 'danger')
     return redirect(url_for('job_detail', jobid=jobid))
 
 

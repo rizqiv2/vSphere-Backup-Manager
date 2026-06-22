@@ -150,6 +150,11 @@
                 <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" style="margin-right: 4px;"><path d="M23 4v6h-6"/><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"/></svg>
                 {{ job.schedule_type|capitalize }}
               </span>
+              {% if job.schedule_id %}
+                <span class="badge badge-green" style="font-size: 10px; padding: 2px 6px; display: inline-block;">Active</span>
+              {% else %}
+                <span class="badge badge-red" style="font-size: 10px; padding: 2px 6px; display: inline-block;">Cancelled</span>
+              {% endif %}
             {% else %}
               <span class="text-muted text-small" style="display: block; margin-bottom: 4px;">One-time</span>
             {% endif %}
@@ -189,6 +194,12 @@
                     style="margin: 0;"
                     onsubmit="return confirm('Cancel this schedule?')">
                 <button class="btn btn-secondary btn-sm" type="submit">Cancel Schedule</button>
+              </form>
+              {% elif job.schedule_type and job.schedule_type != 'now' %}
+              <form method="post" action="/job/{{ job.id }}/reactivate-schedule"
+                    style="margin: 0;"
+                    onsubmit="return confirm('Reactivate this schedule?')">
+                <button class="btn btn-success btn-sm" type="submit">Reactivate Schedule</button>
               </form>
               {% endif %}
               {% if job.status != 'running' and job.status != 'queued' %}

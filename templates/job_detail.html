@@ -209,6 +209,11 @@
             (Day: {{ ['Monday','Tuesday','Wednesday','Thursday','Friday','Saturday','Sunday'][job.weekly_day|int] if (job.weekly_day|string).isdigit() else job.weekly_day }})
           {% endif %}
           {% if job.schedule_time %}at {{ job.schedule_time }}{% endif %}
+          {% if job.schedule_id %}
+            <span class="badge badge-green" style="font-size: 10px; padding: 2px 6px; margin-left: 6px; display: inline-block;">Active</span>
+          {% else %}
+            <span class="badge badge-red" style="font-size: 10px; padding: 2px 6px; margin-left: 6px; display: inline-block;">Cancelled</span>
+          {% endif %}
         {% else %}
           One-time (Run Now)
         {% endif %}
@@ -278,6 +283,16 @@
           style="display:inline; margin-left:12px;"
           onsubmit="return confirm('Cancel recurring schedule?')">
       <button class="btn btn-danger btn-sm" type="submit">Cancel Schedule</button>
+    </form>
+  </div>
+  {% elif job.schedule_type and job.schedule_type != 'now' %}
+  <div class="alert alert-warning" style="margin-bottom:20px;">
+    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="vertical-align: middle; margin-right: 8px;"><path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>
+    The recurring schedule for this job is currently cancelled/inactive.
+    <form method="post" action="/job/{{ job.id }}/reactivate-schedule"
+          style="display:inline; margin-left:12px;"
+          onsubmit="return confirm('Reactivate recurring schedule?')">
+      <button class="btn btn-success btn-sm" type="submit">Reactivate Schedule</button>
     </form>
   </div>
   {% endif %}
