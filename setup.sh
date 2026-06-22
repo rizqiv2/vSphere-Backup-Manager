@@ -19,8 +19,8 @@ echo ""
 
 # ── 1. Install system packages ────────────────────────────────────────────────
 echo "[1/6] Installing Nginx..."
-sudo apt update
-sudo apt install -y nginx
+sudo -E apt update
+sudo -E apt install -y nginx
 
 # ── 2. Install Python packages ────────────────────────────────────────────────
 echo "[2/6] Installing Python dependencies (including gunicorn)..."
