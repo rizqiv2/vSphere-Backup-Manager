@@ -2,9 +2,8 @@ module.exports = {
   apps: [
     {
       name: 'vsphere-backup-manager',
-      // Gunicorn as the production WSGI server
-      // If using a virtualenv, replace 'gunicorn' with './venv/bin/gunicorn'
-      script: 'gunicorn',
+      // Gunicorn inside the virtualenv as the production WSGI server
+      script: './venv/bin/gunicorn',
       args: [
         '--workers', '4',
         '--bind', '127.0.0.1:5000',

@@ -18,15 +18,17 @@ echo "=========================================="
 echo ""
 
 # ── 1. Install system packages ────────────────────────────────────────────────
-echo "[1/6] Installing Nginx..."
+echo "[1/6] Installing Nginx and Python Venv..."
 sudo -E apt update
-sudo -E apt install -y nginx
+sudo -E apt install -y nginx python3-venv
 
-# ── 2. Install Python packages ────────────────────────────────────────────────
-echo "[2/6] Installing Python dependencies (including gunicorn)..."
-# If you use a virtualenv, activate it first:
-#   source ./venv/bin/activate
-pip install -r "$APP_DIR/requirements.txt"
+# ── 2. Install Python packages in virtual environment ────────────────────────
+echo "[2/6] Setting up virtual environment and installing Python dependencies..."
+if [ ! -d "$APP_DIR/venv" ]; then
+    python3 -m venv "$APP_DIR/venv"
+fi
+"$APP_DIR/venv/bin/pip" install --upgrade pip
+"$APP_DIR/venv/bin/pip" install -r "$APP_DIR/requirements.txt"
 
 # ── 3. Generate self-signed SSL certificate (10-year validity) ────────────────
 echo "[3/6] Generating self-signed TLS certificate (10 years)..."
