@@ -305,7 +305,10 @@
               <input type="radio" name="use_cbt" value="" checked id="bkp_radio_full" />
               <div class="bkp-strategy-opt-icon">💾</div>
               <div>
-                <div class="bkp-strategy-opt-title">Full Backup</div>
+                <div class="bkp-strategy-opt-title">
+                  Full Backup
+                  <span class="bkp-strategy-badge" style="background: linear-gradient(135deg, #10b981, #059669);">Recommended</span>
+                </div>
                 <div class="bkp-strategy-opt-desc">Download the entire disk image every run. Best for initial backups or infrequent schedules.</div>
               </div>
             </label>
@@ -315,7 +318,6 @@
               <div>
                 <div class="bkp-strategy-opt-title">
                   Incremental (CBT)
-                  <span class="bkp-strategy-badge">⭐ Enterprise</span>
                 </div>
                 <div class="bkp-strategy-opt-desc">Transfer only <strong>changed blocks</strong> via VMware CBT. Dramatic daily transfer reduction.</div>
               </div>
