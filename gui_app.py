@@ -917,7 +917,7 @@ def create_job():
         except ValueError:
             retention_value = 5
 
-        use_cbt = 'use_cbt' in request.form
+        use_cbt = request.form.get('use_cbt') == '1'
 
         jid = create_and_start_job(
             vm_name=vm_name,
@@ -1029,7 +1029,7 @@ def batch_jobs():
         except ValueError:
             retention_value = 5
 
-        use_cbt = 'use_cbt' in request.form
+        use_cbt = request.form.get('use_cbt') == '1'
 
         label = label_prefix if label_prefix else f"Batch Backup — {len(vm_names)} VMs"
 
