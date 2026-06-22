@@ -115,14 +115,19 @@ def list_vms(host, user, password, no_verify_ssl=False):
 
 
 def wait_for_task(task, action_name='job'):
-    while task.info.state not in (vim.TaskInfo.State.success, vim.TaskInfo.State.error):
+    while True:
+        info = getattr(task, 'info', None)
+        if info and info.state in (vim.TaskInfo.State.success, vim.TaskInfo.State.error):
+            break
         time.sleep(1)
-    if task.info.state == vim.TaskInfo.State.success:
-        return task.info.result
+    info = task.info
+    if info.state == vim.TaskInfo.State.success:
+        return info.result
     else:
-        err = task.info.error
+        err = info.error
+        fault_name = err.__class__.__name__ if err else "UnknownFault"
         err_msg = getattr(err, 'msg', None) or str(err)
-        raise Exception(f"{action_name} did not complete successfully: {err_msg}")
+        raise Exception(f"{action_name} did not complete successfully: {fault_name}: {err_msg}")
 
 
 def create_snapshot(vm, snap_name, desc="backup snapshot", memory=False, quiesce=False):
@@ -152,7 +157,7 @@ def download_datastore_file(host, dc_name, datastore_name, ds_path, local_path,
     print(f"Downloading {ds_path} from datastore {datastore_name} to {local_path}")
     print(f"  URL: {url}")
     sha256 = hashlib.sha256()
-    with requests.get(url, headers=headers, stream=True, verify=verify_ssl, proxies={"http": None, "https": None}) as r:
+    with requests.get(url, headers=headers, stream=True, verify=verify_ssl, proxies={"http": None, "https": None}, timeout=30) as r:
         r.raise_for_status()
         total_bytes = int(r.headers.get('Content-Length', 0))
         print(f"  HTTP {r.status_code}, Content-Length: {total_bytes} bytes")
@@ -370,7 +375,8 @@ def download_disk_changed_ranges(host, dc_name, ds_name, ds_path, extents,
 
             with requests.get(url, headers=req_headers, stream=True,
                               verify=verify_ssl,
-                              proxies={"http": None, "https": None}) as r:
+                              proxies={"http": None, "https": None},
+                              timeout=30) as r:
                 if r.status_code not in (200, 206):
                     raise Exception(f"HTTP {r.status_code} for Range {range_header}")
 
@@ -636,7 +642,7 @@ def _run_backup_impl(host, user, password, vm_name, dest, compress, no_verify_ss
             # Get VMDK paths and normalize them (strip snapshot suffixes like -000001)
             # so we always request the base VMDKs which vCenter streams as the full data disk
             raw_vmdk_refs = vm_disk_vmdk_paths(vm)
-            vmdk_refs = [re.sub(r'-\d+\.vmdk$', '.vmdk', r, flags=re.IGNORECASE) for r in raw_vmdk_refs]
+            vmdk_refs = [re.sub(r'-\d{6}\.vmdk$', '.vmdk', r, flags=re.IGNORECASE) for r in raw_vmdk_refs]
             vmx_ref   = vm_config_vmx_path(vm)
 
             # Build a map of normalized vmdk_ref -> VirtualDisk device for CBT
@@ -645,7 +651,7 @@ def _run_backup_impl(host, user, password, vm_name, dest, compress, no_verify_ss
                 if isinstance(dev, vim.vm.device.VirtualDisk):
                     fn = getattr(dev.backing, 'fileName', None)
                     if fn:
-                        norm = re.sub(r'-\d+\.vmdk$', '.vmdk', fn, flags=re.IGNORECASE)
+                        norm = re.sub(r'-\d{6}\.vmdk$', '.vmdk', fn, flags=re.IGNORECASE)
                         disk_devices[norm] = dev
 
             # Locate the backup snapshot object for CBT queries
@@ -664,7 +670,7 @@ def _run_backup_impl(host, user, password, vm_name, dest, compress, no_verify_ss
 
             # Apply disk filter — only download selected VMDKs
             if disk_filter is not None:
-                disk_filter_set = {re.sub(r'-\d+\.vmdk$', '.vmdk', f, flags=re.IGNORECASE) for f in disk_filter}
+                disk_filter_set = {re.sub(r'-\d{6}\.vmdk$', '.vmdk', f, flags=re.IGNORECASE) for f in disk_filter}
                 skipped = []
                 filtered_vmdk_refs = []
                 for raw_ref, norm_ref in zip(raw_vmdk_refs, vmdk_refs):

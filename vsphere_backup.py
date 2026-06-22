@@ -70,14 +70,19 @@ def find_vm_by_name(content, vm_name):
 
 
 def wait_for_task(task, action_name='job'):
-    while task.info.state not in (vim.TaskInfo.State.success, vim.TaskInfo.State.error):
+    while True:
+        info = getattr(task, 'info', None)
+        if info and info.state in (vim.TaskInfo.State.success, vim.TaskInfo.State.error):
+            break
         time.sleep(1)
-    if task.info.state == vim.TaskInfo.State.success:
-        return task.info.result
+    info = task.info
+    if info.state == vim.TaskInfo.State.success:
+        return info.result
     else:
-        err = task.info.error
+        err = info.error
+        fault_name = err.__class__.__name__ if err else "UnknownFault"
         err_msg = getattr(err, 'msg', None) or str(err)
-        raise Exception(f"{action_name} did not complete successfully: {err_msg}")
+        raise Exception(f"{action_name} did not complete successfully: {fault_name}: {err_msg}")
 
 
 def create_snapshot(vm, snap_name, desc="backup snapshot", memory=False, quiesce=False):
