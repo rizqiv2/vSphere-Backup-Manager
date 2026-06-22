@@ -349,8 +349,6 @@ def enforce_retention_policy(info, log_path=None):
 
     retention_type = info.get('retention_type', 'keep_all')
     retention_val = info.get('retention_value', 5)
-    if retention_type == 'keep_all':
-        return
 
     vm_name = info.get('vm_name')
     parent_dest = info.get('dest')
@@ -363,18 +361,39 @@ def enforce_retention_policy(info, log_path=None):
 
     try:
         subdirs = []
+        failed_dirs = []
         for name in os.listdir(vm_dir):
             path = os.path.join(vm_dir, name)
             if os.path.isdir(path) and name.startswith('backup-'):
-                subdirs.append((name, path))
+                # Check for manifest.json to verify successful completion
+                manifest_file = os.path.join(path, 'manifest.json')
+                if os.path.exists(manifest_file):
+                    subdirs.append((name, path))
+                else:
+                    failed_dirs.append((name, path))
 
-        # Sort chronologically by folder name (backup-YYYYMMDDHHMMSS)
+        # Always clean up failed/incomplete backup directories immediately
+        if failed_dirs:
+            log_msg(f"Found {len(failed_dirs)} failed/incomplete backup directory(ies). Cleaning up...")
+            for name, path in failed_dirs:
+                try:
+                    import shutil
+                    shutil.rmtree(path)
+                    log_msg(f"Cleaned up failed backup directory: {name}")
+                except Exception as e:
+                    log_msg(f"ERROR cleaning up failed backup {name}: {e}")
+
+        # If retention is keep_all, we don't prune successful backups, but we did clean up failed ones
+        if retention_type == 'keep_all':
+            return
+
+        # Sort successful backups chronologically by folder name (backup-YYYYMMDDHHMMSS)
         subdirs.sort(key=lambda x: x[0])
 
         if retention_type == 'keep_count':
             if len(subdirs) > retention_val:
                 to_delete = subdirs[:-retention_val]
-                log_msg(f"Enforcing count retention (keep {retention_val}). Deleting {len(to_delete)} old backup(s)...")
+                log_msg(f"Enforcing count retention (keep {retention_val}). Deleting {len(to_delete)} old successful backup(s)...")
                 for name, path in to_delete:
                     try:
                         import shutil
@@ -486,15 +505,6 @@ def run_job_thread(jid):
                     is_cancelled_cb=is_cancelled,
                 )
                 success_vms.append(vm)
-                
-                # Enforce retention policy for this VM
-                vm_info = {
-                    'vm_name': vm,
-                    'dest': info['dest'],
-                    'retention_type': info.get('retention_type', 'keep_all'),
-                    'retention_value': info.get('retention_value', 5)
-                }
-                enforce_retention_policy(vm_info, log_path=log_path)
             except Exception as e:
                 if "cancelled by user" in str(e).lower():
                     failed_vms.append((vm, "Cancelled by user"))
@@ -506,6 +516,15 @@ def run_job_thread(jid):
                     failed_vms.append((vm, str(e)))
                     with open(log_path, 'a', encoding='utf-8') as f:
                         f.write(f"\nERROR backing up VM {vm}: {e}\n\n")
+            finally:
+                # Always enforce retention policy (which cleans up failed folders immediately)
+                vm_info = {
+                    'vm_name': vm,
+                    'dest': info['dest'],
+                    'retention_type': info.get('retention_type', 'keep_all'),
+                    'retention_value': info.get('retention_value', 5)
+                }
+                enforce_retention_policy(vm_info, log_path=log_path)
         
         if failed_vms:
             if success_vms:
@@ -554,9 +573,6 @@ def run_job_thread(jid):
             info['status']   = 'finished'
             info['progress'] = {'pct': 100, 'phase': 'done', 'detail': 'Backup completed successfully'}
             save_jobs_db()
-            
-            # Enforce retention policy
-            enforce_retention_policy(info, log_path=log_path)
         except Exception as e:
             if "cancelled by user" in str(e).lower():
                 info['status'] = 'failed (Cancelled)'
@@ -564,6 +580,9 @@ def run_job_thread(jid):
             else:
                 info['status'] = f'failed ({e})'
             save_jobs_db()
+        finally:
+            # Always enforce retention policy (which cleans up failed folders immediately)
+            enforce_retention_policy(info, log_path=log_path)
 
 
 def create_and_start_job(
