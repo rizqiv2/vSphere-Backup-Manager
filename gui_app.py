@@ -334,6 +334,7 @@ def job_to_display(jid, info):
         'monthly_day':     info.get('monthly_day'),
         'weekly_day':      info.get('weekly_day'),
         'vm_names':        vm_names,
+        'use_cbt':         info.get('use_cbt', False),
     }
 
 
@@ -503,6 +504,7 @@ def run_job_thread(jid):
                     disk_filter=disk_filter,
                     job_id=jid,
                     is_cancelled_cb=is_cancelled,
+                    use_cbt=info.get('use_cbt', False),
                 )
                 success_vms.append(vm)
             except Exception as e:
@@ -569,6 +571,7 @@ def run_job_thread(jid):
                 disk_filter=info.get('disk_filter'),  # None = all disks
                 job_id=jid,
                 is_cancelled_cb=is_cancelled,
+                use_cbt=info.get('use_cbt', False),
             )
             info['status']   = 'finished'
             info['progress'] = {'pct': 100, 'phase': 'done', 'detail': 'Backup completed successfully'}
@@ -591,11 +594,12 @@ def create_and_start_job(
     schedule_type, schedule_time, weekly_day, interval_hours,
     label='', disk_filter=None, monthly_day=1,
     retention_type='keep_all', retention_value=5,
-    vm_names=None, disk_filter_map=None
+    vm_names=None, disk_filter_map=None, use_cbt=False
 ):
     """Create a job entry and either run immediately or register schedule.
     disk_filter: list of VMDK path strings to include, or None for all.
     monthly_day: day of month (1-28) for monthly schedule.
+    use_cbt: if True enable Changed Block Tracking incremental backup.
     """
     jid = datetime.now().strftime('%Y%m%d%H%M%S') + '-' + uuid.uuid4().hex[:6]
     job_dir = JOBS_DIR / jid
@@ -627,6 +631,7 @@ def create_and_start_job(
         'interval_hours': interval_hours,
         'retention_type':  retention_type,
         'retention_value': retention_value,
+        'use_cbt':         use_cbt,
     }
     jobs[jid] = info
 
@@ -795,6 +800,8 @@ def create_job():
         except ValueError:
             retention_value = 5
 
+        use_cbt = 'use_cbt' in request.form
+
         jid = create_and_start_job(
             vm_name=vm_name,
             dest=dest,
@@ -812,6 +819,7 @@ def create_job():
             monthly_day=monthly_day,
             retention_type=retention_type,
             retention_value=retention_value,
+            use_cbt=use_cbt,
         )
         n_disks = len(disk_filter) if disk_filter is not None else 'all'
         flash(f'Job created — {n_disks} disk(s) selected.', 'success')
@@ -904,6 +912,8 @@ def batch_jobs():
         except ValueError:
             retention_value = 5
 
+        use_cbt = 'use_cbt' in request.form
+
         label = label_prefix if label_prefix else f"Batch Backup — {len(vm_names)} VMs"
 
         jid = create_and_start_job(
@@ -925,6 +935,7 @@ def batch_jobs():
             retention_value=retention_value,
             vm_names=vm_names,
             disk_filter_map=disk_filter_map,
+            use_cbt=use_cbt,
         )
 
         strat_label = {'all': 'all disks', 'os': 'OS disk only', 'vmx': 'VMX config only'}.get(disk_strategy, disk_strategy)

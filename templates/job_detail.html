@@ -273,6 +273,21 @@
         {% endif %}
       </div>
     </div>
+    <div class="detail-item">
+      <div class="detail-item-label">Backup Strategy</div>
+      <div class="detail-item-val" style="font-size:13px; display:flex; align-items:center; gap:8px;">
+        {% if job.use_cbt %}
+          <span style="font-size:14px;">⚡</span>
+          Incremental (CBT)
+          <span style="font-size:10px; font-weight:800; padding:2px 7px; border-radius:100px;
+                       background:linear-gradient(135deg,#6366f1,#06b6d4); color:#fff;
+                       text-transform:uppercase; letter-spacing:0.04em;">Enterprise</span>
+        {% else %}
+          <span style="font-size:14px;">💾</span>
+          Full Backup
+        {% endif %}
+      </div>
+    </div>
   </div>
 
   {% if job.schedule_id %}

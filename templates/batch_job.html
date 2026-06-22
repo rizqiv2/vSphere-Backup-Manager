@@ -111,6 +111,42 @@
     color: var(--text-secondary);
     margin-bottom: 20px;
   }
+
+  .bkp-strategy-options {
+    display: grid; grid-template-columns: 1fr 1fr;
+    gap: 12px; margin-bottom: 4px;
+  }
+  .bkp-strategy-opt {
+    border: 1.5px solid var(--border);
+    border-radius: var(--radius-sm);
+    padding: 16px 20px;
+    cursor: pointer;
+    transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
+    display: flex; align-items: flex-start; gap: 14px;
+    background: rgba(255, 255, 255, 0.01);
+  }
+  .bkp-strategy-opt:hover { border-color: var(--border-bright); background: var(--bg-card-hover); transform: translateY(-1px); }
+  .bkp-strategy-opt.selected { border-color: var(--accent); background: rgba(99, 102, 241, 0.08); box-shadow: 0 4px 12px rgba(99, 102, 241, 0.05); }
+  .bkp-strategy-opt input[type=radio] { display: none; }
+  .bkp-strategy-opt-icon { font-size: 26px; flex-shrink: 0; margin-top: 2px; }
+  .bkp-strategy-opt-title { font-size: 14.5px; font-weight: 700; display: flex; align-items: center; gap: 7px; }
+  .bkp-strategy-opt-desc { font-size: 12px; color: var(--text-muted); margin-top: 4px; font-weight: 500; line-height: 1.5; }
+  .bkp-strategy-badge {
+    font-size: 10px; font-weight: 800; letter-spacing: 0.04em;
+    padding: 2px 7px; border-radius: 100px;
+    background: linear-gradient(135deg, #6366f1, #06b6d4);
+    color: #fff; text-transform: uppercase;
+  }
+  .cbt-info-banner {
+    margin-top: 14px; padding: 12px 16px;
+    background: rgba(99,102,241,0.06);
+    border: 1px solid rgba(99,102,241,0.18);
+    border-radius: var(--radius-sm);
+    font-size: 13px; color: var(--text-secondary);
+    display: none;
+  }
+  .cbt-info-banner.visible { display: block; }
+  .cbt-info-banner strong { color: var(--text-primary); }
 </style>
 {% endblock %}
 
@@ -253,6 +289,43 @@
           </div>
           <div style="margin-top:12px;padding:10px 14px;background:rgba(6,182,212,0.06);border:1px solid rgba(6,182,212,0.15);border-radius:var(--radius-sm);font-size:12.5px;color:var(--text-secondary);" id="stratHint">
             All VMDK disks will be backed up for each VM.
+          </div>
+        </div>
+      </div>
+
+      <!-- Backup Strategy (CBT) -->
+      <div class="section-card">
+        <div class="section-card-header">
+          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="23 4 23 10 17 10"/><polyline points="1 20 1 14 7 14"/><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/></svg>
+          Backup Strategy
+        </div>
+        <div class="section-card-body">
+          <div class="bkp-strategy-options">
+            <label class="bkp-strategy-opt selected" id="bkp-full" onclick="selectBkpStrategy('full')">
+              <input type="radio" name="use_cbt" value="" checked id="bkp_radio_full" />
+              <div class="bkp-strategy-opt-icon">💾</div>
+              <div>
+                <div class="bkp-strategy-opt-title">Full Backup</div>
+                <div class="bkp-strategy-opt-desc">Download the entire disk image every run. Best for initial backups or infrequent schedules.</div>
+              </div>
+            </label>
+            <label class="bkp-strategy-opt" id="bkp-incremental" onclick="selectBkpStrategy('incremental')">
+              <input type="radio" name="use_cbt" value="1" id="bkp_radio_incremental" />
+              <div class="bkp-strategy-opt-icon">⚡</div>
+              <div>
+                <div class="bkp-strategy-opt-title">
+                  Incremental (CBT)
+                  <span class="bkp-strategy-badge">⭐ Enterprise</span>
+                </div>
+                <div class="bkp-strategy-opt-desc">Transfer only <strong>changed blocks</strong> via VMware CBT. Dramatic daily transfer reduction.</div>
+              </div>
+            </label>
+          </div>
+          <div class="cbt-info-banner" id="cbtInfoBanner">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="vertical-align:middle;margin-right:6px;color:var(--accent);"><path d="M13 2L3 14h9l-1 8 10-12h-9l1-8z"/></svg>
+            <strong>80–99% less data transferred on daily runs.</strong>
+            The first run is a full backup that seeds the CBT state. All subsequent runs transfer only changed blocks.
+            CBT requires ESXi 4.0+ and VM hardware version 7+.
           </div>
         </div>
       </div>
@@ -488,6 +561,19 @@
     document.getElementById('strat-' + type).classList.add('selected');
     document.getElementById('strat-' + type).querySelector('input').checked = true;
     document.getElementById('stratHint').textContent = stratHints[type];
+  }
+
+  function selectBkpStrategy(type) {
+    document.getElementById('bkp-full').classList.remove('selected');
+    document.getElementById('bkp-incremental').classList.remove('selected');
+    document.getElementById('bkp-' + type).classList.add('selected');
+    document.getElementById('bkp_radio_' + type).checked = true;
+    const banner = document.getElementById('cbtInfoBanner');
+    if (type === 'incremental') {
+      banner.classList.add('visible');
+    } else {
+      banner.classList.remove('visible');
+    }
   }
 
   document.getElementById('batchForm').addEventListener('submit', function() {

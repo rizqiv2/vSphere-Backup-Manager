@@ -94,6 +94,43 @@
   .sftp-section { display: none; margin-top: 20px; }
   .sftp-section.visible { display: block; }
 
+  .strategy-options {
+    display: grid; grid-template-columns: 1fr 1fr;
+    gap: 12px; margin-bottom: 4px;
+  }
+  .strategy-opt {
+    border: 1.5px solid var(--border);
+    border-radius: var(--radius-sm);
+    padding: 16px 20px;
+    cursor: pointer;
+    transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
+    display: flex; align-items: flex-start; gap: 14px;
+    background: rgba(255, 255, 255, 0.01);
+    position: relative;
+  }
+  .strategy-opt:hover { border-color: var(--border-bright); background: var(--bg-card-hover); transform: translateY(-1px); }
+  .strategy-opt.selected { border-color: var(--accent); background: rgba(99, 102, 241, 0.08); box-shadow: 0 4px 12px rgba(99, 102, 241, 0.05); }
+  .strategy-opt input[type=radio] { display: none; }
+  .strategy-opt-icon { font-size: 26px; flex-shrink: 0; margin-top: 2px; }
+  .strategy-opt-title { font-size: 14.5px; font-weight: 700; display: flex; align-items: center; gap: 7px; }
+  .strategy-opt-desc { font-size: 12px; color: var(--text-muted); margin-top: 4px; font-weight: 500; line-height: 1.5; }
+  .strategy-badge {
+    font-size: 10px; font-weight: 800; letter-spacing: 0.04em;
+    padding: 2px 7px; border-radius: 100px;
+    background: linear-gradient(135deg, #6366f1, #06b6d4);
+    color: #fff; text-transform: uppercase;
+  }
+  .cbt-savings-banner {
+    margin-top: 14px; padding: 12px 16px;
+    background: rgba(99,102,241,0.06);
+    border: 1px solid rgba(99,102,241,0.18);
+    border-radius: var(--radius-sm);
+    font-size: 13px; color: var(--text-secondary);
+    display: none;
+  }
+  .cbt-savings-banner.visible { display: block; }
+  .cbt-savings-banner strong { color: var(--text-primary); }
+
   .action-bar {
     display: flex; gap: 14px; align-items: center;
     padding: 24px 0 0;
@@ -228,6 +265,47 @@
               <label class="form-label" for="sftp_password">SFTP Password</label>
               <input id="sftp_password" class="form-control" type="password" name="sftp_password" placeholder="••••••••" />
             </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Backup Strategy (CBT) -->
+      <div class="section-card">
+        <div class="section-card-header">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="vertical-align: middle; margin-right: 6px;"><polyline points="23 4 23 10 17 10"/><polyline points="1 20 1 14 7 14"/><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/></svg>
+          Backup Strategy
+        </div>
+        <div class="section-card-body">
+          <div class="strategy-options">
+
+            <label class="strategy-opt selected" id="strat-full" onclick="selectStrategy('full')">
+              <input type="radio" name="use_cbt" value="" checked id="strat_radio_full" />
+              <div class="strategy-opt-icon">💾</div>
+              <div>
+                <div class="strategy-opt-title">Full Backup</div>
+                <div class="strategy-opt-desc">Download the entire disk image every run. Simple and always complete — best for first-time setups or infrequent backups.</div>
+              </div>
+            </label>
+
+            <label class="strategy-opt" id="strat-incremental" onclick="selectStrategy('incremental')">
+              <input type="radio" name="use_cbt" value="1" id="strat_radio_incremental" />
+              <div class="strategy-opt-icon">⚡</div>
+              <div>
+                <div class="strategy-opt-title">
+                  Incremental (CBT)
+                  <span class="strategy-badge">⭐ Enterprise</span>
+                </div>
+                <div class="strategy-opt-desc">Transfer only <strong>changed blocks</strong> using VMware Changed Block Tracking. Dramatically reduces daily backup size.</div>
+              </div>
+            </label>
+
+          </div>
+
+          <div class="cbt-savings-banner" id="cbtBanner">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="vertical-align:middle;margin-right:6px;color:var(--accent);"><path d="M13 2L3 14h9l-1 8 10-12h-9l1-8z"/></svg>
+            <strong>80–99% less data transferred on daily runs.</strong>
+            The first run performs a full backup to seed the CBT state. All subsequent runs download only the blocks that changed since the last backup.
+            CBT requires ESXi 4.0+ and VM hardware version 7+.
           </div>
         </div>
       </div>
@@ -461,6 +539,19 @@
     document.getElementById('opt-' + type).querySelector('input').checked = true;
     const detail = document.getElementById('detail-' + type);
     if (detail) detail.classList.add('visible');
+  }
+
+  function selectStrategy(type) {
+    document.getElementById('strat-full').classList.remove('selected');
+    document.getElementById('strat-incremental').classList.remove('selected');
+    document.getElementById('strat-' + type).classList.add('selected');
+    document.getElementById('strat_radio_' + type).checked = true;
+    const banner = document.getElementById('cbtBanner');
+    if (type === 'incremental') {
+      banner.classList.add('visible');
+    } else {
+      banner.classList.remove('visible');
+    }
   }
 
   function toggleSFTP() {

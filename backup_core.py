@@ -14,7 +14,7 @@ from pathlib import Path
 
 import requests
 from pyVim.connect import SmartConnect, Disconnect
-from pyVmomi import vim
+from pyVmomi import vim, vmodl
 
 try:
     import paramiko
@@ -229,6 +229,206 @@ def remove_snapshot(snapshot_obj):
                 raise e
 
 
+# ── CBT (Changed Block Tracking) helpers ─────────────────────────────────────
+
+def enable_cbt(vm, content):
+    """Enable changeTrackingEnabled on a VM if not already set.
+    
+    CBT requires a snapshot cycle to activate. We create+delete a transient
+    snapshot here so the flag takes effect before the real backup snapshot.
+    Returns True if CBT was already enabled, False if we just enabled it.
+    """
+    cfg = vm.config
+    if cfg.changeTrackingEnabled:
+        print("CBT: changeTrackingEnabled is already ON")
+        return True
+
+    print("CBT: Enabling changeTrackingEnabled on VM…")
+    spec = vim.vm.ConfigSpec()
+    spec.changeTrackingEnabled = True
+    task = vm.ReconfigVM_Task(spec=spec)
+    wait_for_task(task, 'EnableCBT')
+    print("CBT: changeTrackingEnabled set to True")
+
+    # Force a snapshot cycle so CBT activates on all disks
+    print("CBT: Creating transient activation snapshot…")
+    act_snap_name = f"cbt-activate-{int(time.time())}"
+    task = vm.CreateSnapshot_Task(
+        name=act_snap_name,
+        description="CBT activation (auto-deleted)",
+        memory=False, quiesce=False
+    )
+    wait_for_task(task, 'CBTActivateSnapshot')
+
+    # Immediately delete it
+    snap_root = getattr(vm, 'snapshot', None)
+    if snap_root and snap_root.rootSnapshotList:
+        snap_obj = find_snapshot_by_name(snap_root.rootSnapshotList, act_snap_name)
+        if snap_obj:
+            task = snap_obj.RemoveSnapshot_Task(removeChildren=False)
+            wait_for_task(task, 'CBTActivateSnapshotRemove')
+    print("CBT: Transient snapshot removed — CBT is now active")
+    return False
+
+
+def get_disk_device_by_key(vm, device_key):
+    """Return the VirtualDisk device object for a given device key."""
+    for dev in vm.config.hardware.device:
+        if isinstance(dev, vim.vm.device.VirtualDisk) and dev.key == device_key:
+            return dev
+    return None
+
+
+def get_disk_change_id(snapshot_ref, device_key):
+    """Return the changeId for a disk at a given snapshot.
+    
+    changeId '*' means "give me all changes since disk was created" — used
+    to seed the first incremental after a full backup.
+    """
+    try:
+        for disk_layout in snapshot_ref.config.hardware.device:
+            if isinstance(disk_layout, vim.vm.device.VirtualDisk) and disk_layout.key == device_key:
+                backing = disk_layout.backing
+                cid = getattr(backing, 'changeId', None)
+                if cid:
+                    return cid
+    except Exception as e:
+        print(f"CBT: Could not get changeId for device key {device_key}: {e}")
+    return None
+
+
+def query_changed_areas(vm_snapshot, device_key, change_id, start_offset=0):
+    """Call QueryChangedDiskAreas and return a list of {start, length} extents.
+    
+    change_id: the changeId from the *previous* backup snapshot.
+               Use '*' to get all changed areas since disk creation.
+    Returns list of dicts: [{'start': int, 'length': int}, ...]
+    """
+    extents = []
+    try:
+        result = vm_snapshot.QueryChangedDiskAreas(
+            id=device_key,
+            startOffset=start_offset,
+            changeId=change_id
+        )
+        if result and result.changedArea:
+            for area in result.changedArea:
+                extents.append({'start': area.start, 'length': area.length})
+        print(f"CBT: QueryChangedDiskAreas returned {len(extents)} extent(s), "
+              f"{sum(e['length'] for e in extents) // (1024*1024)} MB changed")
+    except vmodl.fault.InvalidArgument as e:
+        print(f"CBT: InvalidArgument querying changed areas (changeId may be stale): {e}")
+        raise
+    except Exception as e:
+        print(f"CBT: Error querying changed areas: {e}")
+        raise
+    return extents
+
+
+def download_disk_changed_ranges(host, dc_name, ds_name, ds_path, extents,
+                                  local_path, session_cookie,
+                                  total_disk_size, verify_ssl=True,
+                                  progress_cb=None):
+    """Download only the changed byte extents from a flat VMDK via HTTP Range requests.
+
+    Writes a sparse file: changed extents are filled with downloaded data;
+    unchanged regions remain as zero bytes (seek over them).
+    Returns (sha256_hex, bytes_downloaded).
+    """
+    encoded_path = urllib.parse.quote(ds_path, safe='/')
+    url = (f"https://{host}/folder/{encoded_path}"
+           f"?dcPath={urllib.parse.quote(dc_name)}&dsName={urllib.parse.quote(ds_name)}")
+    headers_base = {"Cookie": f"vmware_soap_session={session_cookie}"}
+
+    total_changed = sum(e['length'] for e in extents)
+    print(f"CBT: Downloading {len(extents)} changed extent(s), "
+          f"{total_changed // (1024*1024)} MB / "
+          f"{total_disk_size // (1024*1024)} MB total")
+
+    sha256 = hashlib.sha256()
+    bytes_downloaded = 0
+
+    os.makedirs(os.path.dirname(local_path), exist_ok=True)
+
+    # We build a sparse file matching the full disk geometry so restore works
+    with open(local_path, 'wb') as f:
+        # Pre-allocate to full disk size (sparse/hole-punched on Linux)
+        if total_disk_size > 0:
+            f.seek(total_disk_size - 1)
+            f.write(b'\x00')
+            f.seek(0)
+
+        # Track file position for SHA-256 over the full logical disk
+        # We hash the file after writing instead of on-the-fly to handle seeks correctly
+        for i, extent in enumerate(extents):
+            start = extent['start']
+            length = extent['length']
+            end_byte = start + length - 1
+
+            range_header = f"bytes={start}-{end_byte}"
+            req_headers = {**headers_base, "Range": range_header}
+
+            with requests.get(url, headers=req_headers, stream=True,
+                              verify=verify_ssl,
+                              proxies={"http": None, "https": None}) as r:
+                if r.status_code not in (200, 206):
+                    raise Exception(f"HTTP {r.status_code} for Range {range_header}")
+
+                f.seek(start)
+                for chunk in r.iter_content(chunk_size=4 * 1024 * 1024):
+                    if chunk:
+                        f.write(chunk)
+                        bytes_downloaded += len(chunk)
+
+            if progress_cb and total_changed > 0:
+                progress_cb(bytes_downloaded, total_changed)
+
+    # Compute SHA-256 of the resulting file
+    sha256 = hashlib.sha256()
+    with open(local_path, 'rb') as f:
+        while True:
+            chunk = f.read(4 * 1024 * 1024)
+            if not chunk:
+                break
+            sha256.update(chunk)
+
+    print(f"CBT: Incremental download complete — {bytes_downloaded // (1024*1024)} MB written")
+    return sha256.hexdigest(), bytes_downloaded
+
+
+CBT_STATE_FILENAME = 'cbt_state.json'
+
+
+def load_cbt_state(vm_base_dir):
+    """Load the CBT state dict from <vm_base_dir>/cbt_state.json.
+    
+    Returns dict with structure:
+      { 'last_backup_ts': str, 'disks': { disk_path: { 'change_id': str, ... } } }
+    or empty dict if not found.
+    """
+    state_path = os.path.join(vm_base_dir, CBT_STATE_FILENAME)
+    if not os.path.exists(state_path):
+        return {}
+    try:
+        with open(state_path, 'r', encoding='utf-8') as f:
+            return json.load(f)
+    except Exception as e:
+        print(f"CBT: Could not read state file {state_path}: {e}")
+        return {}
+
+
+def save_cbt_state(vm_base_dir, state):
+    """Persist the CBT state dict to <vm_base_dir>/cbt_state.json."""
+    os.makedirs(vm_base_dir, exist_ok=True)
+    state_path = os.path.join(vm_base_dir, CBT_STATE_FILENAME)
+    try:
+        with open(state_path, 'w', encoding='utf-8') as f:
+            json.dump(state, f, indent=2)
+        print(f"CBT: State saved to {state_path}")
+    except Exception as e:
+        print(f"CBT: Could not save state file: {e}")
+
+
 def get_file_sha256(filepath, decompress_if_zst=False):
     """Compute the SHA-256 hash of a file. Optionally decompress on-the-fly if it is a .zst file."""
     sha256 = hashlib.sha256()
@@ -344,10 +544,12 @@ def upload_via_sftp(host, user, password, key_filename, local_path, remote_dir):
 def run_backup(host, user, password, vm_name, dest, compress=False, no_verify_ssl=False,
                sftp_host=None, sftp_user=None, sftp_password=None, sftp_key=None,
                log_path=None, progress_cb=None, disk_filter=None, job_id=None,
-               is_cancelled_cb=None):
-    """Run full backup flow.
+               is_cancelled_cb=None, use_cbt=False):
+    """Run backup flow (full or CBT incremental).
     disk_filter: if not None, a set/list of VMDK file-ref strings to include.
                  The VMX config file is always included regardless.
+    use_cbt: if True, attempt Changed Block Tracking incremental backup.
+             Falls back to full download if CBT state is unavailable.
     """
     if log_path:
         logfile = open(log_path, 'a', encoding='utf-8', buffering=1)
@@ -356,7 +558,7 @@ def run_backup(host, user, password, vm_name, dest, compress=False, no_verify_ss
                 return _run_backup_impl(host, user, password, vm_name, dest, compress, no_verify_ssl,
                                         sftp_host, sftp_user, sftp_password, sftp_key,
                                         progress_cb=progress_cb, disk_filter=disk_filter, job_id=job_id,
-                                        is_cancelled_cb=is_cancelled_cb)
+                                        is_cancelled_cb=is_cancelled_cb, use_cbt=use_cbt)
         try:
             return _wrap()
         finally:
@@ -365,13 +567,13 @@ def run_backup(host, user, password, vm_name, dest, compress=False, no_verify_ss
         return _run_backup_impl(host, user, password, vm_name, dest, compress, no_verify_ssl,
                                 sftp_host, sftp_user, sftp_password, sftp_key,
                                 progress_cb=progress_cb, disk_filter=disk_filter, job_id=job_id,
-                                is_cancelled_cb=is_cancelled_cb)
+                                is_cancelled_cb=is_cancelled_cb, use_cbt=use_cbt)
 
 
 def _run_backup_impl(host, user, password, vm_name, dest, compress, no_verify_ssl,
                      sftp_host, sftp_user, sftp_password, sftp_key,
                      progress_cb=None, disk_filter=None, job_id=None,
-                     is_cancelled_cb=None):
+                     is_cancelled_cb=None, use_cbt=False):
     def _prog(phase, pct, detail=''):
         if progress_cb:
             try:
@@ -399,6 +601,28 @@ def _run_backup_impl(host, user, password, vm_name, dest, compress, no_verify_ss
 
         snap_name = f"backup-{int(time.time())}"
         created_snapshot = False
+
+        # ── CBT pre-snapshot setup ────────────────────────────────────────────
+        # vm_base_dir is where cbt_state.json lives (shared across all run dirs)
+        vm_base_dir = os.path.join(dest, vm_name) if not dest.endswith(vm_name) else dest
+        # Normalize: dest passed in is already the run-specific dir (backup-YYYYMMDDHHMMSS)
+        # so we go one level up to find the VM base dir for CBT state
+        vm_base_dir = str(Path(dest).parent)
+
+        cbt_state = {}
+        if use_cbt:
+            _prog('snapshot', 1, 'Enabling Changed Block Tracking (CBT)…')
+            try:
+                enable_cbt(vm, content)
+                cbt_state = load_cbt_state(vm_base_dir)
+                if cbt_state:
+                    print(f"CBT: Found prior state from {cbt_state.get('last_backup_ts', 'unknown')}")
+                else:
+                    print("CBT: No prior state — this will be a FULL backup (seeding CBT)")
+            except Exception as e:
+                print(f"CBT: Failed to enable CBT, falling back to full backup: {e}")
+                use_cbt = False
+
         try:
             _prog('snapshot', 3, 'Creating snapshot…')
             create_snapshot(vm, snap_name, desc="Automated backup snapshot", memory=False, quiesce=False)
@@ -414,6 +638,29 @@ def _run_backup_impl(host, user, password, vm_name, dest, compress, no_verify_ss
             raw_vmdk_refs = vm_disk_vmdk_paths(vm)
             vmdk_refs = [re.sub(r'-\d+\.vmdk$', '.vmdk', r, flags=re.IGNORECASE) for r in raw_vmdk_refs]
             vmx_ref   = vm_config_vmx_path(vm)
+
+            # Build a map of normalized vmdk_ref -> VirtualDisk device for CBT
+            disk_devices = {}
+            for dev in vm.config.hardware.device:
+                if isinstance(dev, vim.vm.device.VirtualDisk):
+                    fn = getattr(dev.backing, 'fileName', None)
+                    if fn:
+                        norm = re.sub(r'-\d+\.vmdk$', '.vmdk', fn, flags=re.IGNORECASE)
+                        disk_devices[norm] = dev
+
+            # Locate the backup snapshot object for CBT queries
+            snap_ref = None
+            if use_cbt:
+                try:
+                    snap_root = getattr(vm, 'snapshot', None)
+                    if snap_root and snap_root.rootSnapshotList:
+                        snap_ref = find_snapshot_by_name(snap_root.rootSnapshotList, snap_name)
+                    if not snap_ref:
+                        print("CBT: Could not locate backup snapshot for QueryChangedDiskAreas — falling back to full")
+                        use_cbt = False
+                except Exception as e:
+                    print(f"CBT: Snapshot lookup failed: {e} — falling back to full")
+                    use_cbt = False
 
             # Apply disk filter — only download selected VMDKs
             if disk_filter is not None:
@@ -431,11 +678,18 @@ def _run_backup_impl(host, user, password, vm_name, dest, compress, no_verify_ss
                 if not vmdk_refs:
                     print("Warning: no disks selected — backing up VMX config only.")
 
+            # ── Build download list ───────────────────────────────────────────
+            # Descriptor (.vmdk) + flat data (-flat.vmdk) pairs, plus VMX
+            # For CBT mode, we only do range-downloads on the flat file; the
+            # small descriptor is always fetched in full.
             all_refs = []
+            flat_vmdk_refs = set()   # track which refs are flat data disks
             for ref in vmdk_refs:
-                all_refs.append(ref)
+                all_refs.append(ref)  # descriptor (small)
                 if ref.lower().endswith('.vmdk') and not ref.lower().endswith('-flat.vmdk'):
-                    all_refs.append(ref[:-5] + '-flat.vmdk')
+                    flat_ref = ref[:-5] + '-flat.vmdk'
+                    all_refs.append(flat_ref)
+                    flat_vmdk_refs.add(flat_ref)
             if vmx_ref:
                 all_refs.append(vmx_ref)
 
@@ -447,6 +701,12 @@ def _run_backup_impl(host, user, password, vm_name, dest, compress, no_verify_ss
 
             downloaded_files = []
             files_manifest_info = []
+
+            # Track CBT savings across all disks for manifest
+            cbt_total_changed_bytes = 0
+            cbt_total_disk_bytes = 0
+            new_cbt_disk_state = {}   # updated state to persist after success
+
             for file_idx, ref in enumerate(all_refs):
                 if is_cancelled_cb and is_cancelled_cb():
                     raise RuntimeError("Backup cancelled by user")
@@ -481,25 +741,102 @@ def _run_backup_impl(host, user, password, vm_name, dest, compress, no_verify_ss
 
                 _prog('downloading', file_base_pct,
                       f'Starting file {file_idx+1}/{total_files}: {os.path.basename(ds_path)}')
-                file_sha = download_datastore_file(
-                    host, dc_name, ds_name, ds_path, local_file, session_cookie,
-                    verify_ssl=not no_verify_ssl,
-                    progress_cb=make_dl_cb(file_idx, total_files, file_base_pct,
-                                           file_share, os.path.basename(ds_path))
-                )
+
+                # ── CBT incremental path for flat VMDK data disks ─────────────
+                is_flat_disk = ref in flat_vmdk_refs
+                did_cbt = False
+                file_sha = None
+                bytes_downloaded_this_file = None
+
+                if use_cbt and is_flat_disk and snap_ref:
+                    # Find the device key for the descriptor that corresponds
+                    # to this flat file (descriptor ref = flat_ref without -flat)
+                    descriptor_ref = ref[:-len('-flat.vmdk')] + '.vmdk'
+                    dev = disk_devices.get(descriptor_ref)
+
+                    if dev:
+                        device_key = dev.key
+                        prior_disk_state = cbt_state.get('disks', {}).get(ref, {})
+                        prior_change_id = prior_disk_state.get('change_id')
+                        disk_size_bytes = (getattr(dev, 'capacityInKB', 0) or 0) * 1024
+
+                        if prior_change_id:
+                            # ── Incremental: query and download only changes ──
+                            print(f"CBT: Incremental mode for {ref} "
+                                  f"(prior changeId: {prior_change_id[:20]}…)")
+                            try:
+                                extents = query_changed_areas(
+                                    snap_ref, device_key, prior_change_id
+                                )
+                                if not extents:
+                                    print(f"CBT: No changes detected for {ref} — creating empty delta")
+                                    os.makedirs(os.path.dirname(local_file), exist_ok=True)
+                                    open(local_file, 'wb').close()
+                                    file_sha = hashlib.sha256(b'').hexdigest()
+                                    bytes_downloaded_this_file = 0
+                                    did_cbt = True
+                                else:
+                                    total_extent_bytes = sum(e['length'] for e in extents)
+                                    cbt_total_changed_bytes += total_extent_bytes
+                                    cbt_total_disk_bytes += disk_size_bytes
+
+                                    file_sha, bytes_downloaded_this_file = download_disk_changed_ranges(
+                                        host, dc_name, ds_name, ds_path, extents,
+                                        local_file, session_cookie,
+                                        total_disk_size=disk_size_bytes,
+                                        verify_ssl=not no_verify_ssl,
+                                        progress_cb=make_dl_cb(
+                                            file_idx, total_files,
+                                            file_base_pct, file_share,
+                                            f"[CBT] {os.path.basename(ds_path)}"
+                                        )
+                                    )
+                                    did_cbt = True
+
+                            except Exception as cbt_err:
+                                print(f"CBT: Incremental download failed ({cbt_err}), "
+                                      f"falling back to full download for {ref}")
+                                did_cbt = False
+                        else:
+                            # No prior state: this is the seeding full backup
+                            print(f"CBT: No prior changeId for {ref} — "
+                                  f"performing FULL download to seed CBT")
+                            cbt_total_disk_bytes += disk_size_bytes
+
+                        # After snapshot, get the new changeId for next run
+                        new_cid = get_disk_change_id(snap_ref, device_key)
+                        new_cbt_disk_state[ref] = {
+                            'change_id': new_cid or '*',
+                            'backup_type': 'incremental' if (did_cbt and prior_change_id) else 'full',
+                            'last_snapshot': snap_name,
+                        }
+
+                if not did_cbt:
+                    # ── Full download path (also used for descriptors & VMX) ──
+                    file_sha = download_datastore_file(
+                        host, dc_name, ds_name, ds_path, local_file, session_cookie,
+                        verify_ssl=not no_verify_ssl,
+                        progress_cb=make_dl_cb(file_idx, total_files, file_base_pct,
+                                               file_share, os.path.basename(ds_path))
+                    )
+
                 downloaded_files.append(local_file)
 
-                # Checksum was computed on-the-fly during download
                 file_size = os.path.getsize(local_file)
-                print(f"SHA-256 (computed on-the-fly): {file_sha} (size: {file_size} bytes)")
+                print(f"SHA-256: {file_sha} (size: {file_size} bytes)")
 
-                # Relative path from dest directory using forward slashes (e.g. "datastore1/Nakivo/Nakivo.vmdk")
                 rel_path = os.path.relpath(local_file, dest).replace(os.sep, '/')
-                files_manifest_info.append({
+                manifest_entry = {
                     "path": rel_path,
                     "size_bytes": file_size,
-                    "sha256": file_sha
-                })
+                    "sha256": file_sha,
+                }
+                if use_cbt and is_flat_disk and ref in new_cbt_disk_state:
+                    disk_st = new_cbt_disk_state[ref]
+                    manifest_entry['backup_type'] = disk_st.get('backup_type', 'full')
+                    if bytes_downloaded_this_file is not None:
+                        manifest_entry['changed_bytes'] = bytes_downloaded_this_file
+                files_manifest_info.append(manifest_entry)
 
             _prog('compressing', 90, 'Downloads complete. Creating manifest…')
             if is_cancelled_cb and is_cancelled_cb():
@@ -507,6 +844,14 @@ def _run_backup_impl(host, user, password, vm_name, dest, compress, no_verify_ss
 
             # Write manifest.json
             finished_iso = datetime.utcnow().strftime('%Y-%m-%dT%H:%M:%SZ')
+
+            # Determine overall backup type label
+            has_incremental = any(
+                e.get('backup_type') == 'incremental'
+                for e in files_manifest_info
+            )
+            overall_type = 'incremental' if has_incremental else 'full'
+
             manifest_data = {
                 "job_id": job_id or "...",
                 "vm_name": vm_name,
@@ -514,12 +859,35 @@ def _run_backup_impl(host, user, password, vm_name, dest, compress, no_verify_ss
                 "finished": finished_iso,
                 "vcenter": host,
                 "snapshot": snap_name,
+                "backup_type": overall_type,
+                "cbt_enabled": use_cbt,
                 "files": files_manifest_info
             }
+
+            if use_cbt and cbt_total_disk_bytes > 0:
+                savings_pct = round(
+                    (1 - cbt_total_changed_bytes / cbt_total_disk_bytes) * 100, 1
+                )
+                manifest_data['cbt_transfer_savings_pct'] = savings_pct
+                manifest_data['cbt_changed_bytes'] = cbt_total_changed_bytes
+                manifest_data['cbt_total_disk_bytes'] = cbt_total_disk_bytes
+                print(f"CBT summary: {savings_pct}% transfer savings "
+                      f"({cbt_total_changed_bytes // (1024*1024)} MB transferred of "
+                      f"{cbt_total_disk_bytes // (1024*1024)} MB total)")
+
             manifest_path = os.path.join(dest, 'manifest.json')
             with open(manifest_path, 'w', encoding='utf-8') as f:
                 json.dump(manifest_data, f, indent=2)
             print(f"Backup manifest created at {manifest_path}")
+
+            # Persist CBT state for next incremental run
+            if use_cbt and new_cbt_disk_state:
+                updated_state = {
+                    'last_backup_ts': finished_iso,
+                    'backup_type': overall_type,
+                    'disks': new_cbt_disk_state,
+                }
+                save_cbt_state(vm_base_dir, updated_state)
 
             final_files = []
             for f in downloaded_files:
