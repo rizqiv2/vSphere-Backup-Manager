@@ -183,6 +183,59 @@
     color: var(--text-secondary);
   }
   .empty-state .empty-icon { font-size: 52px; margin-bottom: 16px; opacity: 0.4; }
+
+  /* ── VM Quick-Action Menu ── */
+  .vm-actions-btn {
+    position: absolute; top: 14px; right: 14px;
+    width: 30px; height: 30px;
+    display: flex; align-items: center; justify-content: center;
+    background: rgba(8,10,16,0.5);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    color: var(--text-muted);
+    cursor: pointer;
+    opacity: 0;
+    transition: all .15s ease;
+    z-index: 10;
+    font-size: 16px;
+  }
+  .vm-card:hover .vm-actions-btn { opacity: 1; }
+  .vm-actions-btn:hover {
+    background: rgba(99,102,241,0.15);
+    border-color: var(--accent);
+    color: var(--text-primary);
+  }
+  .vm-context-menu {
+    position: absolute; top: 50px; right: 14px;
+    background: rgba(18, 22, 35, 0.98);
+    backdrop-filter: blur(24px);
+    border: 1px solid var(--border-bright);
+    border-radius: var(--radius-sm);
+    box-shadow: 0 16px 48px rgba(0,0,0,0.5);
+    min-width: 200px;
+    z-index: 100;
+    display: none;
+    overflow: hidden;
+    animation: menu-in .15s ease;
+  }
+  @keyframes menu-in { from { opacity:0; transform:scale(0.95) translateY(-4px); } to { opacity:1; transform:scale(1) translateY(0); } }
+  .vm-context-menu.open { display: block; }
+  .ctx-item {
+    display: flex; align-items: center; gap: 10px;
+    padding: 10px 16px;
+    font-size: 13px; font-weight: 500;
+    color: var(--text-secondary);
+    cursor: pointer;
+    transition: all .1s ease;
+    text-decoration: none;
+    border: none; background: none; width: 100%;
+    text-align: left;
+  }
+  .ctx-item:hover { background: rgba(99,102,241,0.1); color: var(--text-primary); }
+  .ctx-item.danger:hover { background: rgba(239,68,68,0.1); color: #fca5a5; }
+  .ctx-item-icon { width: 18px; text-align: center; font-size: 14px; flex-shrink: 0; }
+  .ctx-divider { height: 1px; background: var(--border); margin: 4px 0; }
+  .ctx-item .ctx-kbd { margin-left: auto; font-size: 10px; color: var(--text-muted); font-family: 'JetBrains Mono', monospace; }
 </style>
 {% endblock %}
 
@@ -274,6 +327,28 @@
       <!-- Selection checkbox overlay -->
       <div class="vm-check">
         <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="#ffffff" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>
+      </div>
+
+      <!-- Quick-action menu button -->
+      <button class="vm-actions-btn" onclick="event.stopPropagation(); toggleVmMenu(this)" title="Actions">
+        ⋯
+      </button>
+      <div class="vm-context-menu" onclick="event.stopPropagation()">
+        <a class="ctx-item" href="/jobs/create?vm={{ vm.name|urlencode }}">
+          <span class="ctx-item-icon">⚡</span> Backup Now
+        </a>
+        <a class="ctx-item" href="/jobs/create?vm={{ vm.name|urlencode }}&schedule=1">
+          <span class="ctx-item-icon">📅</span> Schedule Backup
+        </a>
+        <div class="ctx-divider"></div>
+        <button class="ctx-item" data-copy="{{ vm.name }}">
+          <span class="ctx-item-icon">📋</span> Copy VM Name
+        </button>
+        {% if vm.ip_address %}
+        <button class="ctx-item" data-copy="{{ vm.ip_address }}">
+          <span class="ctx-item-icon">🌐</span> Copy IP Address
+        </button>
+        {% endif %}
       </div>
 
       <div class="vm-card-header">
@@ -451,5 +526,30 @@
     selected.forEach(vm => params.append('vms', vm));
     window.location.href = '/jobs/batch?' + params.toString();
   }
+
+  // ── VM Context Menu ───────────────────────────────────────────────────────
+  let openMenu = null;
+  function toggleVmMenu(btn) {
+    closeAllMenus();
+    const menu = btn.nextElementSibling;
+    menu.classList.add('open');
+    openMenu = menu;
+  }
+  function closeAllMenus() {
+    document.querySelectorAll('.vm-context-menu.open').forEach(m => m.classList.remove('open'));
+    openMenu = null;
+  }
+  document.addEventListener('click', function(e) {
+    if (openMenu && !openMenu.contains(e.target)) closeAllMenus();
+  });
+  // Hide action button when in select mode
+  const origToggle = toggleSelectMode;
+  toggleSelectMode = function() {
+    origToggle();
+    document.querySelectorAll('.vm-actions-btn').forEach(b => {
+      b.style.display = selectMode ? 'none' : '';
+    });
+    if (selectMode) closeAllMenus();
+  };
 </script>
 {% endblock %}
