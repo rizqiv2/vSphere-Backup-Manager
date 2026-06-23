@@ -60,6 +60,23 @@
     text-transform: uppercase;
     letter-spacing: 0.02em;
   }
+
+  .jobs-stat {
+    cursor: pointer;
+    transition: transform 0.15s ease, border-color 0.2s ease, box-shadow 0.2s ease;
+    user-select: none;
+  }
+  .jobs-stat:hover {
+    transform: translateY(-2px);
+    box-shadow: 0 4px 12px rgba(0,0,0,0.15);
+  }
+  .jobs-stat.active {
+    border-color: var(--accent);
+    box-shadow: 0 0 0 2px var(--accent-glow), var(--shadow);
+  }
+  .jobs-stat.active .jobs-stat-lbl {
+    color: var(--accent);
+  }
 </style>
 {% endblock %}
 
@@ -80,27 +97,27 @@
 <div class="content">
   <!-- Summary chips -->
   <div class="jobs-summary">
-    <div class="jobs-stat">
+    <div class="jobs-stat active" data-filter="all">
       <div class="jobs-stat-val">{{ jobs|length }}</div>
       <div class="jobs-stat-lbl">Total</div>
     </div>
-    <div class="jobs-stat">
+    <div class="jobs-stat" data-filter="running">
       <div class="jobs-stat-val" style="color:var(--accent)">{{ jobs|selectattr('status','equalto','running')|list|length }}</div>
       <div class="jobs-stat-lbl">Running</div>
     </div>
-    <div class="jobs-stat">
+    <div class="jobs-stat" data-filter="finished">
       <div class="jobs-stat-val" style="color:var(--success)">{{ jobs|selectattr('status','equalto','finished')|list|length }}</div>
       <div class="jobs-stat-lbl">Finished</div>
     </div>
-    <div class="jobs-stat">
+    <div class="jobs-stat" data-filter="queued">
       <div class="jobs-stat-val" style="color:var(--warning)">{{ jobs|selectattr('status','equalto','queued')|list|length }}</div>
       <div class="jobs-stat-lbl">Queued</div>
     </div>
-    <div class="jobs-stat">
+    <div class="jobs-stat" data-filter="failed">
       <div class="jobs-stat-val" style="color:var(--danger)">{% set fcnt = namespace(n=0) %}{% for j in jobs %}{% if j.status.startswith('failed') %}{% set fcnt.n = fcnt.n + 1 %}{% endif %}{% endfor %}{{ fcnt.n }}</div>
       <div class="jobs-stat-lbl">Failed</div>
     </div>
-    <div class="jobs-stat">
+    <div class="jobs-stat" data-filter="scheduled">
       <div class="jobs-stat-val" style="color:var(--accent-2)">{{ scheduled_count }}</div>
       <div class="jobs-stat-lbl">Scheduled</div>
     </div>
@@ -121,7 +138,7 @@
       </thead>
       <tbody>
         {% for job in jobs %}
-        <tr>
+        <tr data-status="{{ job.status }}" data-scheduled="{{ '1' if job.schedule_id else '0' }}">
           <td>
             <div style="font-weight:600;font-size:13px;">
               {{ job.label or ('Job #' + job.id[:8]) }}
@@ -238,6 +255,58 @@
   const hasRunning = {{ 'true' if jobs|selectattr('status','equalto','running')|list|length > 0 else 'false' }};
   if (hasRunning) {
     setTimeout(() => location.reload(), 8000);
+  }
+
+  // Status filter
+  const statCards = document.querySelectorAll('.jobs-stat[data-filter]');
+  const tableRows = document.querySelectorAll('tbody tr[data-status]');
+  let activeFilter = localStorage.getItem('jobsFilter') || 'all';
+
+  function applyFilter(filter) {
+    activeFilter = filter;
+    localStorage.setItem('jobsFilter', filter);
+    statCards.forEach(card => {
+      card.classList.toggle('active', card.dataset.filter === filter);
+    });
+    let visibleCount = 0;
+    tableRows.forEach(row => {
+      let show = false;
+      if (filter === 'all') {
+        show = true;
+      } else if (filter === 'failed') {
+        show = row.dataset.status.startsWith('failed');
+      } else if (filter === 'scheduled') {
+        show = row.dataset.scheduled === '1';
+      } else {
+        show = row.dataset.status === filter;
+      }
+      row.style.display = show ? '' : 'none';
+      if (show) visibleCount++;
+    });
+    // Show "no matches" message if filter yields zero results
+    let noMatch = document.getElementById('no-filter-match');
+    if (!noMatch && visibleCount === 0) {
+      const tbody = document.querySelector('tbody');
+      noMatch = document.createElement('tr');
+      noMatch.id = 'no-filter-match';
+      noMatch.innerHTML = '<td colspan="6" style="text-align:center;padding:32px;color:var(--text-muted);">No jobs match this filter.</td>';
+      tbody.appendChild(noMatch);
+    } else if (noMatch && visibleCount > 0) {
+      noMatch.remove();
+    }
+  }
+
+  statCards.forEach(card => {
+    card.addEventListener('click', () => {
+      const filter = card.dataset.filter;
+      // Toggle off if clicking the already-active filter
+      applyFilter(filter === activeFilter ? 'all' : filter);
+    });
+  });
+
+  // Apply persisted filter on load
+  if (activeFilter !== 'all') {
+    applyFilter(activeFilter);
   }
 </script>
 {% endblock %}
