@@ -140,7 +140,7 @@
         {% endif %}
       </span>
     </div>
-    <div class="topbar-subtitle">Job ID: <span class="mono">{{ job.id }}</span></div>
+    <div class="topbar-subtitle">Job ID: <span class="mono" data-copy="{{ job.id }}" style="cursor:pointer; border-bottom:1px dashed var(--border);" title="Click to copy">{{ job.id }}</span></div>
   </div>
   <div class="topbar-actions" style="display: flex; gap: 8px; align-items: center;">
     {% if job.status != 'running' and job.status != 'queued' %}
@@ -229,7 +229,7 @@
     </div>
     <div class="detail-item">
       <div class="detail-item-label">Backup Location</div>
-      <div class="detail-item-val mono" style="font-size:12px; word-break:break-all;">
+      <div class="detail-item-val mono" style="font-size:12px; word-break:break-all; cursor:pointer;" data-copy="{{ job.run_dest or job.dest or '' }}" title="Click to copy">
         {% if job.run_dest %}
           {{ job.run_dest }}
         {% else %}
@@ -350,6 +350,10 @@
       <div class="flex-center gap-2">
         <span id="spinnerWrap" class="spinner" style="display:none;"></span>
         <span id="autoRefreshLabel" class="text-small text-muted" style="display:none;">Live</span>
+        <button id="followBtn" class="btn btn-ghost btn-sm" onclick="toggleFollow()" title="Auto-scroll log" style="border-color: var(--accent); color: #a5b4fc;">
+          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" style="margin-right: 4px;"><polyline points="6 9 12 15 18 9"/></svg>
+          Follow
+        </button>
         <button class="btn btn-ghost btn-sm" onclick="scrollLogBottom()">
           <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" style="margin-right: 4px;"><line x1="12" y1="5" x2="12" y2="19"/><polyline points="19 12 12 19 5 12"/></svg>
           Bottom
@@ -368,6 +372,28 @@
   const initStatus = {{ job.status | tojson }};
 
   const PHASES = ['connecting','snapshot','downloading','compressing','uploading','cleanup','done'];
+  let following = true;
+
+  function toggleFollow() {
+    following = !following;
+    const btn = document.getElementById('followBtn');
+    if (following) {
+      btn.style.borderColor = 'var(--accent)';
+      btn.style.color = '#a5b4fc';
+      scrollLogBottom();
+    } else {
+      btn.style.borderColor = 'var(--border)';
+      btn.style.color = 'var(--text-muted)';
+    }
+  }
+
+  // Detect manual scroll up to disable follow
+  const logEl = document.getElementById('logContent');
+  logEl.addEventListener('scroll', function() {
+    if (!following) return;
+    const atBottom = logEl.scrollHeight - logEl.scrollTop - logEl.clientHeight < 40;
+    if (!atBottom) toggleFollow();
+  });
 
   function setProgress(prog) {
     const pct     = Math.min(100, Math.max(0, prog.pct || 0));
@@ -415,6 +441,7 @@
       const text = await res.text();
       const pre  = document.getElementById('logContent');
       if (text.trim()) pre.textContent = text;
+      if (following) scrollLogBottom();
     } catch(e) {}
   }
 
