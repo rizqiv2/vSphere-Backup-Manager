@@ -206,9 +206,19 @@
       <div class="detail-item-val">
         {% if job.schedule_type and job.schedule_type != 'now' %}
           <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" style="vertical-align: middle; margin-right: 6px;"><path d="M23 4v6h-6"/><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"/></svg>
-          {{ job.schedule_type|capitalize }}
-          {% if job.schedule_type == 'monthly' and job.monthly_day is not none %}
+          {% if job.schedule_type == '3_monthly' %}
+            3 Monthly
+          {% elif job.schedule_type == '6_monthly' %}
+            6 Monthly
+          {% elif job.schedule_type == 'yearly' %}
+            Yearly
+          {% else %}
+            {{ job.schedule_type|capitalize }}
+          {% endif %}
+          {% if job.schedule_type in ['monthly', '3_monthly', '6_monthly'] and job.monthly_day is not none %}
             (Day: {{ job.monthly_day }})
+          {% elif job.schedule_type == 'yearly' and job.yearly_month is not none %}
+            (Month: {{ ['January','February','March','April','May','June','July','August','September','October','November','December'][job.yearly_month|int - 1] if (job.yearly_month|string).isdigit() else job.yearly_month }}, Day: {{ job.monthly_day }})
           {% elif job.schedule_type == 'weekly' and job.weekly_day is not none %}
             (Day: {{ ['Monday','Tuesday','Wednesday','Thursday','Friday','Saturday','Sunday'][job.weekly_day|int] if (job.weekly_day|string).isdigit() else job.weekly_day }})
           {% endif %}

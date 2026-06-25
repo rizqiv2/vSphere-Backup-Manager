@@ -78,7 +78,7 @@
   .strategy-desc { font-size: 11.5px; color: var(--text-muted); margin-top: 3px; }
 
   .schedule-options {
-    display: grid; grid-template-columns: repeat(2, 1fr);
+    display: grid; grid-template-columns: repeat(auto-fill, minmax(160px, 1fr));
     gap: 10px; margin-bottom: 16px;
   }
   .schedule-opt {
@@ -366,7 +366,7 @@
           Schedule
         </div>
         <div class="section-card-body">
-          <div class="schedule-options" style="grid-template-columns: repeat(3, 1fr);">
+          <div class="schedule-options">
             <label class="schedule-opt selected" id="opt-now" onclick="selectSchedule('now')">
               <input type="radio" name="schedule_type" value="now" checked />
               <div>
@@ -405,6 +405,36 @@
                 </div>
                 <div class="schedule-opt-title">Monthly</div>
                 <div class="schedule-opt-desc">Specific day each month</div>
+              </div>
+            </label>
+            <label class="schedule-opt" id="opt-3_monthly" onclick="selectSchedule('3_monthly')">
+              <input type="radio" name="schedule_type" value="3_monthly" />
+              <div>
+                <div class="schedule-opt-icon">
+                  <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="color:var(--accent);"><rect x="3" y="4" width="18" height="18" rx="2" ry="2"/><line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="3" y1="10" x2="21" y2="10"/><path d="M8 14h4"/><path d="M8 18h2"/></svg>
+                </div>
+                <div class="schedule-opt-title">3 Monthly</div>
+                <div class="schedule-opt-desc">Every 3 months</div>
+              </div>
+            </label>
+            <label class="schedule-opt" id="opt-6_monthly" onclick="selectSchedule('6_monthly')">
+              <input type="radio" name="schedule_type" value="6_monthly" />
+              <div>
+                <div class="schedule-opt-icon">
+                  <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="color:var(--accent);"><rect x="3" y="4" width="18" height="18" rx="2" ry="2"/><line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="3" y1="10" x2="21" y2="10"/><path d="M8 14h4"/><path d="M8 18h2"/></svg>
+                </div>
+                <div class="schedule-opt-title">6 Monthly</div>
+                <div class="schedule-opt-desc">Every 6 months</div>
+              </div>
+            </label>
+            <label class="schedule-opt" id="opt-yearly" onclick="selectSchedule('yearly')">
+              <input type="radio" name="schedule_type" value="yearly" />
+              <div>
+                <div class="schedule-opt-icon">
+                  <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="color:var(--accent);"><rect x="3" y="4" width="18" height="18" rx="2" ry="2"/><line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="3" y1="10" x2="21" y2="10"/><circle cx="12" cy="14" r="2"/></svg>
+                </div>
+                <div class="schedule-opt-title">Yearly</div>
+                <div class="schedule-opt-desc">Once a year</div>
               </div>
             </label>
             <label class="schedule-opt" id="opt-interval" onclick="selectSchedule('interval')">
@@ -449,6 +479,18 @@
             </div>
           </div>
           <div class="schedule-detail" id="detail-monthly">
+            <div class="form-row" id="yearly_month_row" style="display:none; margin-bottom: 12px;">
+              <div class="form-group" style="margin:0; grid-column: span 2;">
+                <label class="form-label" for="yearly_month">Month of Year</label>
+                <select id="yearly_month" name="yearly_month" class="form-control">
+                  {% for m in range(1, 13) %}
+                    <option value="{{ m }}" {% if current_month == m %}selected{% endif %}>
+                      {{ ['January','February','March','April','May','June','July','August','September','October','November','December'][m-1] }}
+                    </option>
+                  {% endfor %}
+                </select>
+              </div>
+            </div>
             <div class="form-row" style="margin-bottom: 12px;">
               <div class="form-group" style="margin:0; grid-column: span 2;">
                 <label class="form-label" for="monthly_basis">Monthly Schedule Type</label>
@@ -539,17 +581,34 @@
 
 {% block scripts %}
 <script>
-  const ALL_SCHED = ['now','daily','weekly','monthly','interval'];
+  const ALL_SCHED = ['now','daily','weekly','monthly','3_monthly','6_monthly','yearly','interval'];
 
   function selectSchedule(type) {
     ALL_SCHED.forEach(t => {
-      document.getElementById('opt-' + t).classList.remove('selected');
+      const opt = document.getElementById('opt-' + t);
+      if (opt) opt.classList.remove('selected');
       const d = document.getElementById('detail-' + t);
       if (d) d.classList.remove('visible');
     });
-    document.getElementById('opt-' + type).classList.add('selected');
-    document.getElementById('opt-' + type).querySelector('input').checked = true;
-    const detail = document.getElementById('detail-' + type);
+    const selectedOpt = document.getElementById('opt-' + type);
+    if (selectedOpt) {
+      selectedOpt.classList.add('selected');
+      selectedOpt.querySelector('input').checked = true;
+    }
+    
+    let detailId = 'detail-' + type;
+    if (['3_monthly', '6_monthly', 'yearly'].includes(type)) {
+      detailId = 'detail-monthly';
+      const yearlyRow = document.getElementById('yearly_month_row');
+      if (yearlyRow) {
+        yearlyRow.style.display = (type === 'yearly') ? '' : 'none';
+      }
+    } else {
+      const yearlyRow = document.getElementById('yearly_month_row');
+      if (yearlyRow) yearlyRow.style.display = 'none';
+    }
+    
+    const detail = document.getElementById(detailId);
     if (detail) detail.classList.add('visible');
   }
 

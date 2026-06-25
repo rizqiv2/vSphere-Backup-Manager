@@ -105,6 +105,115 @@ python vsphere_backup.py --host vc.example.com --user administrator@vsphere.loca
 
 ---
 
+## Manual Restore & Clone
+
+Backups are stored in **native VMware format** (VMDK + VMX), so they can be restored directly to vCenter/ESXi without any conversion.
+
+### Backup File Structure
+
+```
+backups/<VM_NAME>/backup-YYYYMMDDHHMMSS/
+├── manifest.json                  ← SHA-256 checksums + metadata
+├── <VM_NAME>.vmx                  ← VM configuration (CPU, RAM, network, etc.)
+└── <datastore_name>/
+    └── <VM_NAME>/
+        ├── <VM_NAME>.vmdk         ← Disk descriptor (~500 bytes, plain text)
+        └── <VM_NAME>-flat.vmdk    ← Actual disk data (full size)
+```
+
+With compression enabled, files are stored as `.vmdk.zst` / `-flat.vmdk.zst`.
+
+### Restoring a VM (In-Place)
+
+#### Step 1 — Decompress (if compressed)
+
+```bash
+zstd -d <VM_NAME>.vmdk.zst
+zstd -d <VM_NAME>-flat.vmdk.zst
+```
+
+#### Step 2 — Verify Checksum
+
+```bash
+# Compare the output with the value in manifest.json
+sha256sum <VM_NAME>-flat.vmdk
+```
+
+#### Step 3 — Upload to Datastore
+
+**Option A — vSphere Web Client** (easiest)
+
+1. Navigate to **Storage** → select the target datastore
+2. Create or navigate to the VM folder
+3. Upload the `.vmx`, `.vmdk`, and `-flat.vmdk` files
+
+**Option B — SCP to ESXi host**
+
+```bash
+# Enable SSH on the ESXi host first, then:
+scp -r ./backup-20260623020000/<datastore>/<VM_NAME>/ \
+  root@esxi-host:/vmfs/volumes/<datastore>/<VM_NAME>/
+```
+
+**Option C — PowerCLI**
+
+```powershell
+# Copy files to ESXi datastore via datastore browser
+Copy-DatastoreItem -Item ".\*.vmdk" -Destination "[datastore1] <VM_NAME>/"
+```
+
+#### Step 4 — Register the VM
+
+Right-click the `.vmx` file in the datastore browser → **Register VM**, or use PowerCLI:
+
+```powershell
+New-VM -VMFilePath "[datastore1] <VM_NAME>/<VM_NAME>.vmx" -VMHost "esxi-host"
+```
+
+#### Step 5 — Power On
+
+```powershell
+Start-VM "<VM_NAME>"
+```
+
+### Cloning from Backup (New VM)
+
+To restore a backup as a **separate new VM** without affecting the original:
+
+1. Upload files to a **new folder** on the datastore (e.g. `<VM_NAME>-clone/`)
+
+2. Edit the `.vmx` file — change these lines to avoid UUID/MAC conflicts:
+
+   ```
+   displayName = "<VM_NAME>-clone"
+   uuid.bios = "generate a new UUID"
+   ethernet0.generateAddress = "00:0c:29:xx:xx:xx"
+   ```
+
+3. Remove any snapshot references if present:
+
+   ```
+   # Delete or comment out lines starting with:
+   snapshot.redoNotWithParent =
+   ```
+
+4. Register and power on:
+
+   ```powershell
+   New-VM -VMFilePath "[datastore1] <VM_NAME>-clone/<VM_NAME>.vmx"
+   Start-VM "<VM_NAME>-clone"
+   ```
+
+### Best Practices
+
+- **Keep a copy** — never restore over your only backup copy
+- **Test restore quarterly** — verify backups actually work before you need them
+- **Isolated network first** — always boot cloned VMs on an isolated port group to check for IP conflicts before connecting to production
+- **CBT resets on clone** — the first backup of a cloned VM will be a full backup (CBT state does not carry over)
+- **Snapshot cleanup** — if the backup was taken with snapshots still active, remove orphaned snapshots after restore
+
+---
+
 ## Safety & Architecture
 
 1. **Snapshot Isolation**: The backup engine creates a temporary snapshot on the target VM, downloads the locked base files (such as `.vmdk` descriptors, `-flat.vmdk` disk data, and `.vmx` configurations) directly from the Datastore HTTP gateway, and deletes the snapshot immediately afterwards.

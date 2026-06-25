@@ -72,7 +72,7 @@
   }
   @media(min-width: 600px) {
     .strategy-options { grid-template-columns: 1fr 1fr; }
-    .schedule-options { grid-template-columns: repeat(5, 1fr); }
+    .schedule-options { grid-template-columns: repeat(auto-fill, minmax(130px, 1fr)); }
   }
 
   .strategy-opt, .schedule-opt {
@@ -366,6 +366,33 @@
                 <div class="schedule-opt-desc">Specific day each month</div>
               </div>
             </label>
+
+            <label class="schedule-opt {% if job.schedule_type == '3_monthly' %}selected{% endif %}" id="opt-3_monthly" onclick="selectSchedule('3_monthly')">
+              <input type="radio" name="schedule_type" value="3_monthly" {% if job.schedule_type == '3_monthly' %}checked{% endif %} />
+              <div>
+                <div class="schedule-opt-icon">📆</div>
+                <div class="schedule-opt-title">3 Monthly</div>
+                <div class="schedule-opt-desc">Every 3 months</div>
+              </div>
+            </label>
+
+            <label class="schedule-opt {% if job.schedule_type == '6_monthly' %}selected{% endif %}" id="opt-6_monthly" onclick="selectSchedule('6_monthly')">
+              <input type="radio" name="schedule_type" value="6_monthly" {% if job.schedule_type == '6_monthly' %}checked{% endif %} />
+              <div>
+                <div class="schedule-opt-icon">📆</div>
+                <div class="schedule-opt-title">6 Monthly</div>
+                <div class="schedule-opt-desc">Every 6 months</div>
+              </div>
+            </label>
+
+            <label class="schedule-opt {% if job.schedule_type == 'yearly' %}selected{% endif %}" id="opt-yearly" onclick="selectSchedule('yearly')">
+              <input type="radio" name="schedule_type" value="yearly" {% if job.schedule_type == 'yearly' %}checked{% endif %} />
+              <div>
+                <div class="schedule-opt-icon">📆</div>
+                <div class="schedule-opt-title">Yearly</div>
+                <div class="schedule-opt-desc">Once a year</div>
+              </div>
+            </label>
           </div>
 
           <!-- Daily detail -->
@@ -415,7 +442,20 @@
           {% set day_str = raw_job.monthly_day|string %}
           {% set week_num_val = day_str.split(' ')[0] if is_weekday else '1st' %}
           {% set dow_val = day_str.split(' ')[1] if is_weekday else 'sun' %}
-          <div class="schedule-detail {% if job.schedule_type == 'monthly' %}visible{% endif %}" id="detail-monthly">
+          <div class="schedule-detail {% if job.schedule_type in ['monthly', '3_monthly', '6_monthly', 'yearly'] %}visible{% endif %}" id="detail-monthly">
+            <div class="form-row" id="yearly_month_row" style="{% if job.schedule_type != 'yearly' %}display:none;{% endif %} margin-bottom: 12px;">
+              <div class="form-group" style="margin:0; grid-column: span 2;">
+                <label class="form-label" for="yearly_month">Month of Year</label>
+                <select id="yearly_month" name="yearly_month" class="form-control">
+                  {% set selected_m = (raw_job.yearly_month|int) if raw_job.yearly_month else (current_month or 1) %}
+                  {% for m in range(1, 13) %}
+                    <option value="{{ m }}" {% if selected_m == m %}selected{% endif %}>
+                      {{ ['January','February','March','April','May','June','July','August','September','October','November','December'][m-1] }}
+                    </option>
+                  {% endfor %}
+                </select>
+              </div>
+            </div>
             <div class="form-row" style="margin-bottom: 12px;">
               <div class="form-group" style="margin:0; grid-column: span 2;">
                 <label class="form-label" for="monthly_basis">Monthly Schedule Type</label>
@@ -433,7 +473,7 @@
               </div>
               <div class="form-group" style="margin:0;">
                 <label class="form-label" for="monthly_time_1">Time (24h)</label>
-                <input id="monthly_time_1" class="form-control" type="time" name="monthly_time_1" value="{% if job.schedule_type == 'monthly' and not is_weekday %}{{ job.schedule_time }}{% else %}02:00{% endif %}" />
+                <input id="monthly_time_1" class="form-control" type="time" name="monthly_time_1" value="{% if job.schedule_type in ['monthly', '3_monthly', '6_monthly', 'yearly'] and not is_weekday %}{{ job.schedule_time }}{% else %}02:00{% endif %}" />
               </div>
             </div>
 
@@ -462,7 +502,7 @@
               </div>
               <div class="form-group" style="margin:0; grid-column: span 2; margin-top: 12px;">
                 <label class="form-label" for="monthly_time_2">Time (24h)</label>
-                <input id="monthly_time_2" class="form-control" type="time" name="monthly_time_2" value="{% if job.schedule_type == 'monthly' and is_weekday %}{{ job.schedule_time }}{% else %}02:00{% endif %}" />
+                <input id="monthly_time_2" class="form-control" type="time" name="monthly_time_2" value="{% if job.schedule_type in ['monthly', '3_monthly', '6_monthly', 'yearly'] and is_weekday %}{{ job.schedule_time }}{% else %}02:00{% endif %}" />
               </div>
             </div>
           </div>
@@ -484,14 +524,32 @@
 {% block scripts %}
 <script>
   function selectSchedule(type) {
-    ['now','daily','weekly','monthly','interval'].forEach(t => {
-      document.getElementById('opt-' + t).classList.remove('selected');
+    const allTypes = ['now','daily','weekly','monthly','3_monthly','6_monthly','yearly','interval'];
+    allTypes.forEach(t => {
+      const opt = document.getElementById('opt-' + t);
+      if (opt) opt.classList.remove('selected');
       const d = document.getElementById('detail-' + t);
       if (d) d.classList.remove('visible');
     });
-    document.getElementById('opt-' + type).classList.add('selected');
-    document.getElementById('opt-' + type).querySelector('input').checked = true;
-    const detail = document.getElementById('detail-' + type);
+    const selectedOpt = document.getElementById('opt-' + type);
+    if (selectedOpt) {
+      selectedOpt.classList.add('selected');
+      selectedOpt.querySelector('input').checked = true;
+    }
+    
+    let detailId = 'detail-' + type;
+    if (['3_monthly', '6_monthly', 'yearly'].includes(type)) {
+      detailId = 'detail-monthly';
+      const yearlyRow = document.getElementById('yearly_month_row');
+      if (yearlyRow) {
+        yearlyRow.style.display = (type === 'yearly') ? '' : 'none';
+      }
+    } else {
+      const yearlyRow = document.getElementById('yearly_month_row');
+      if (yearlyRow) yearlyRow.style.display = 'none';
+    }
+    
+    const detail = document.getElementById(detailId);
     if (detail) detail.classList.add('visible');
   }
 

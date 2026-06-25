@@ -207,6 +207,37 @@ def register_scheduler_job(info):
             day=day_val,
             hour=int(hour), minute=int(minute)
         )
+    elif schedule_type == '3_monthly':
+        hour, minute = (schedule_time.split(':') + ['00'])[:2]
+        day_val = monthly_day
+        if str(day_val).isdigit():
+            day_val = max(1, min(28, int(day_val)))
+        trigger = CronTrigger(
+            month='*/3',
+            day=day_val,
+            hour=int(hour), minute=int(minute)
+        )
+    elif schedule_type == '6_monthly':
+        hour, minute = (schedule_time.split(':') + ['00'])[:2]
+        day_val = monthly_day
+        if str(day_val).isdigit():
+            day_val = max(1, min(28, int(day_val)))
+        trigger = CronTrigger(
+            month='*/6',
+            day=day_val,
+            hour=int(hour), minute=int(minute)
+        )
+    elif schedule_type == 'yearly':
+        hour, minute = (schedule_time.split(':') + ['00'])[:2]
+        day_val = monthly_day
+        if str(day_val).isdigit():
+            day_val = max(1, min(28, int(day_val)))
+        yearly_month = info.get('yearly_month', '1')
+        trigger = CronTrigger(
+            month=int(yearly_month) if str(yearly_month).isdigit() else 1,
+            day=day_val,
+            hour=int(hour), minute=int(minute)
+        )
     elif schedule_type == 'interval':
         trigger = IntervalTrigger(hours=max(1, int(interval_hours or 24)))
 
@@ -432,6 +463,7 @@ def job_to_display(jid, info):
         'retention_type':  info.get('retention_type', 'keep_all'),
         'retention_value': info.get('retention_value', 5),
         'monthly_day':     info.get('monthly_day'),
+        'yearly_month':    info.get('yearly_month'),
         'weekly_day':      info.get('weekly_day'),
         'vm_names':        vm_names,
         'use_cbt':         info.get('use_cbt', False),
@@ -708,7 +740,7 @@ def create_and_start_job(
     vm_name, dest, compress, no_verify_ssl,
     sftp_host, sftp_user, sftp_password,
     schedule_type, schedule_time, weekly_day, interval_hours,
-    label='', disk_filter=None, monthly_day=1,
+    label='', disk_filter=None, monthly_day=1, yearly_month=1,
     retention_type='keep_all', retention_value=5,
     vm_names=None, disk_filter_map=None, use_cbt=False
 ):
@@ -744,6 +776,7 @@ def create_and_start_job(
         'disk_filter':   disk_filter,  # None = back up all disks
         'weekly_day':    weekly_day,
         'monthly_day':   monthly_day,
+        'yearly_month':  yearly_month,
         'interval_hours': interval_hours,
         'retention_type':  retention_type,
         'retention_value': retention_value,
@@ -886,6 +919,7 @@ def create_job():
             monthly_day = request.form.get('monthly_day', '1')
             monthly_time = request.form.get('monthly_time_1', '02:00')
             
+        yearly_month  = request.form.get('yearly_month', '1')
         interval_hrs  = request.form.get('interval_hours', '24')
         label         = request.form.get('job_label', '').strip()
 
@@ -898,7 +932,7 @@ def create_job():
             sched_time = daily_time
         elif schedule_type == 'weekly':
             sched_time = weekly_time
-        elif schedule_type == 'monthly':
+        elif schedule_type in ('monthly', '3_monthly', '6_monthly', 'yearly'):
             sched_time = monthly_time
         else:
             sched_time = ''
@@ -934,6 +968,7 @@ def create_job():
             label=label,
             disk_filter=disk_filter,
             monthly_day=monthly_day,
+            yearly_month=yearly_month,
             retention_type=retention_type,
             retention_value=retention_value,
             use_cbt=use_cbt,
@@ -955,11 +990,13 @@ def create_job():
     # Sort alphabetically for the dropdown
     vm_list = sorted(vm_list, key=lambda v: v['name'].lower())
 
+    from datetime import datetime
     return render_template(
         'create_job.html',
         vms=vm_list,
         selected_vm=selected_vm,
         show_schedule=show_schedule,
+        current_month=datetime.now().month,
     )
 
 
@@ -995,6 +1032,7 @@ def batch_jobs():
             monthly_day = request.form.get('monthly_day', '1')
             monthly_time = request.form.get('monthly_time_1', '02:00')
             
+        yearly_month  = request.form.get('yearly_month', '1')
         interval_hrs  = request.form.get('interval_hours', '24')
         label_prefix  = request.form.get('job_label', '').strip()
 
@@ -1002,7 +1040,7 @@ def batch_jobs():
             sched_time = daily_time
         elif schedule_type == 'weekly':
             sched_time = weekly_time
-        elif schedule_type == 'monthly':
+        elif schedule_type in ('monthly', '3_monthly', '6_monthly', 'yearly'):
             sched_time = monthly_time
         else:
             sched_time = ''
@@ -1048,6 +1086,7 @@ def batch_jobs():
             label=label,
             disk_filter=None,
             monthly_day=monthly_day,
+            yearly_month=yearly_month,
             retention_type=retention_type,
             retention_value=retention_value,
             vm_names=vm_names,
@@ -1066,10 +1105,12 @@ def batch_jobs():
         flash('No VMs specified for batch backup.', 'danger')
         return redirect(url_for('vms'))
 
+    from datetime import datetime
     return render_template(
         'batch_job.html',
         vm_names=vm_names,
         vms_by_name=vms_by_name,
+        current_month=datetime.now().month,
     )
 
 
@@ -1279,6 +1320,7 @@ def edit_job(jobid):
                 monthly_day = request.form.get('monthly_day', '1')
                 monthly_time = request.form.get('monthly_time_1', '02:00')
 
+            yearly_month  = request.form.get('yearly_month', '1')
             interval_hrs  = request.form.get('interval_hours', '24')
             label         = request.form.get('job_label', '').strip()
 
@@ -1286,7 +1328,7 @@ def edit_job(jobid):
                 sched_time = daily_time
             elif schedule_type == 'weekly':
                 sched_time = weekly_time
-            elif schedule_type == 'monthly':
+            elif schedule_type in ('monthly', '3_monthly', '6_monthly', 'yearly'):
                 sched_time = monthly_time
             else:
                 sched_time = ''
@@ -1319,6 +1361,7 @@ def edit_job(jobid):
             info['schedule_time'] = sched_time
             info['weekly_day'] = weekly_day
             info['monthly_day'] = monthly_day
+            info['yearly_month'] = yearly_month
             info['interval_hours'] = interval_hrs
 
             # Register new schedule if applicable
@@ -1338,7 +1381,8 @@ def edit_job(jobid):
 
         # GET: Display edit form
         job_disp = job_to_display(jobid, info)
-        return render_template('edit_job.html', job=job_disp, raw_job=info)
+        from datetime import datetime
+        return render_template('edit_job.html', job=job_disp, raw_job=info, current_month=datetime.now().month)
 
 
 # ── Template filter ───────────────────────────────────────────────────────────
