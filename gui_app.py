@@ -537,11 +537,76 @@ def set_setting(key, value):
         conn.close()
 
 
-def send_webhook_notification(url, payload_type, run_data, raise_on_error=False):
-    if not url:
-        return
+def send_webhook_notification(url, payload_type, run_data, raise_on_error=False, telegram_bot_token=None, telegram_chat_id=None):
     import requests
     
+    if payload_type == 'telegram':
+        token = (telegram_bot_token or get_setting('telegram_bot_token', '')).strip()
+        chat_id = (telegram_chat_id or get_setting('telegram_chat_id', '')).strip()
+        if not (token and chat_id):
+            msg = "Telegram Bot Token and Chat ID are required for Telegram notifications."
+            print(f"Telegram error: {msg}", file=sys.stderr)
+            if raise_on_error:
+                raise RuntimeError(msg)
+            return
+            
+        size_gb = run_data['size_bytes'] / (1024 * 1024 * 1024)
+        duration_str = fmt_duration(run_data['duration'])
+        started_str = datetime.fromtimestamp(run_data['started']).strftime('%Y-%m-%d %H:%M:%S')
+        status_text = run_data['status'].upper()
+        
+        status_emoji = "✅"
+        if "failed" in run_data['status'].lower():
+            status_emoji = "❌"
+        elif "error" in run_data['status'].lower():
+            status_emoji = "⚠️"
+            
+        title = f"<b>Backup Job {status_text}</b>"
+        text = (
+            f"{status_emoji} {title}\n\n"
+            f"<b>Job:</b> {run_data['job_label'] or run_data['job_id'][:8]}\n"
+            f"<b>VM(s):</b> {run_data['vm_name']}\n"
+            f"<b>Size:</b> {size_gb:.2f} GB\n"
+            f"<b>Duration:</b> {duration_str}\n"
+            f"<b>Started:</b> {started_str}\n"
+            f"<b>Status:</b> {run_data['status']}\n\n"
+            f"<i>Job ID: {run_data['job_id']}</i>"
+        )
+        
+        target_url = f"https://api.telegram.org/bot{token}/sendMessage"
+        payload = {
+            "chat_id": chat_id,
+            "text": text,
+            "parse_mode": "HTML"
+        }
+        
+        try:
+            r = requests.post(target_url, json=payload, timeout=15)
+            r.raise_for_status()
+        except requests.exceptions.HTTPError as e:
+            status_code = e.response.status_code if e.response is not None else "Unknown"
+            resp_text = e.response.text if e.response is not None else ""
+            try:
+                err_data = e.response.json()
+                if 'description' in err_data:
+                    msg = f"Telegram API error ({status_code}): {err_data['description']}"
+                else:
+                    msg = f"Telegram API error ({status_code}): {resp_text[:100]}"
+            except Exception:
+                msg = f"Telegram API error ({status_code}): {resp_text[:100] or e}"
+            print(f"Telegram error: {msg}", file=sys.stderr)
+            if raise_on_error:
+                raise RuntimeError(msg) from e
+        except Exception as e:
+            msg = f"Failed to send Telegram message: {e}"
+            print(f"Telegram error: {msg}", file=sys.stderr)
+            if raise_on_error:
+                raise RuntimeError(msg) from e
+        return
+
+    if not url:
+        return
+        
     size_gb = run_data['size_bytes'] / (1024 * 1024 * 1024)
     duration_str = fmt_duration(run_data['duration'])
     started_str = datetime.fromtimestamp(run_data['started']).strftime('%Y-%m-%d %H:%M:%S')
@@ -997,7 +1062,7 @@ def log_and_notify_run(jid, info, start_time, end_time, status, run_dest):
     webhook_enabled = get_setting('webhook_enabled') == 'true'
     webhook_url = get_setting('webhook_url')
     webhook_type = get_setting('webhook_type', 'slack_discord')
-    if webhook_enabled and webhook_url:
+    if webhook_enabled and (webhook_url or webhook_type == 'telegram'):
         try:
             send_webhook_notification(webhook_url, webhook_type, run_data)
             notification_sent = 1
@@ -1577,6 +1642,8 @@ def settings_page():
         set_setting('webhook_enabled', 'true' if 'webhook_enabled' in request.form else 'false')
         set_setting('webhook_url', request.form.get('webhook_url', '').strip())
         set_setting('webhook_type', request.form.get('webhook_type', 'slack_discord'))
+        set_setting('telegram_bot_token', request.form.get('telegram_bot_token', '').strip())
+        set_setting('telegram_chat_id', request.form.get('telegram_chat_id', '').strip())
         
         set_setting('alert_level', request.form.get('alert_level', 'all'))
         set_setting('log_retention_days', request.form.get('log_retention_days', 'never'))
@@ -1599,6 +1666,8 @@ def settings_page():
         'webhook_enabled': get_setting('webhook_enabled', 'false') == 'true',
         'webhook_url': get_setting('webhook_url', ''),
         'webhook_type': get_setting('webhook_type', 'slack_discord'),
+        'telegram_bot_token': get_setting('telegram_bot_token', ''),
+        'telegram_chat_id': get_setting('telegram_chat_id', ''),
         
         'alert_level': get_setting('alert_level', 'all'),
         'log_retention_days': get_setting('log_retention_days', 'never')
@@ -1644,9 +1713,18 @@ def settings_test_notification():
     webhook_error = None
     email_error = None
 
-    if webhook_enabled and webhook_url:
+    if webhook_enabled and (webhook_url or webhook_type == 'telegram'):
         try:
-            send_webhook_notification(webhook_url, webhook_type, test_run_data, raise_on_error=True)
+            telegram_bot_token = request.form.get('telegram_bot_token', '').strip()
+            telegram_chat_id = request.form.get('telegram_chat_id', '').strip()
+            send_webhook_notification(
+                webhook_url,
+                webhook_type,
+                test_run_data,
+                raise_on_error=True,
+                telegram_bot_token=telegram_bot_token,
+                telegram_chat_id=telegram_chat_id
+            )
         except Exception as e:
             webhook_error = str(e)
 

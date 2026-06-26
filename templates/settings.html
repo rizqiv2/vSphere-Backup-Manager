@@ -227,16 +227,30 @@
           
           <div class="settings-toggle-area {% if settings.webhook_enabled %}expanded{% else %}collapsed{% endif %}" id="webhookFields">
             <div class="form-group">
+              <label class="form-label" for="webhook_type">Alert Channel / Format</label>
+              <select id="webhook_type" name="webhook_type" class="form-control" onchange="toggleWebhookType(this.value)">
+                <option value="slack_discord" {% if settings.webhook_type != 'raw_json' and settings.webhook_type != 'telegram' %}selected{% endif %}>Slack & Discord Format (Rich Embeds / Color Bars)</option>
+                <option value="raw_json" {% if settings.webhook_type == 'raw_json' %}selected{% endif %}>Raw JSON Payload (Full backup runs telemetry data)</option>
+                <option value="telegram" {% if settings.webhook_type == 'telegram' %}selected{% endif %}>Telegram Bot alert (Deliver instant text alerts to chat/channel)</option>
+              </select>
+            </div>
+            
+            <div class="form-group" id="webhookUrlGroup" style="{% if settings.webhook_type == 'telegram' %}display:none{% endif %}">
               <label class="form-label" for="webhook_url">Webhook Destination URL</label>
               <input type="url" id="webhook_url" name="webhook_url" class="form-control" placeholder="e.g. https://discord.com/api/webhooks/... or https://hooks.slack.com/services/..." value="{{ settings.webhook_url }}" />
             </div>
-            
-            <div class="form-group">
-              <label class="form-label" for="webhook_type">Webhook Payload Format</label>
-              <select id="webhook_type" name="webhook_type" class="form-control">
-                <option value="slack_discord" {% if settings.webhook_type == 'slack_discord' %}selected{% endif %}>Slack & Discord Format (Rich Embeds / Color Bars)</option>
-                <option value="raw_json" {% if settings.webhook_type == 'raw_json' %}selected{% endif %}>Raw JSON Payload (Full backup runs telemetry data)</option>
-              </select>
+
+            <div id="telegramFields" style="{% if settings.webhook_type != 'telegram' %}display:none{% endif %}">
+              <div class="form-row">
+                <div class="form-group">
+                  <label class="form-label" for="telegram_bot_token">Telegram Bot Token</label>
+                  <input type="password" id="telegram_bot_token" name="telegram_bot_token" class="form-control" placeholder="e.g. 123456789:ABCdefGh..." value="{{ settings.telegram_bot_token }}" autocomplete="new-password" />
+                </div>
+                <div class="form-group">
+                  <label class="form-label" for="telegram_chat_id">Telegram Chat / Channel ID</label>
+                  <input type="text" id="telegram_chat_id" name="telegram_chat_id" class="form-control" placeholder="e.g. 987654321 or @channelname" value="{{ settings.telegram_chat_id }}" />
+                </div>
+              </div>
             </div>
           </div>
         </div>
@@ -325,6 +339,18 @@
       fields.classList.remove('expanded');
       fields.classList.add('collapsed');
       card.classList.remove('enabled');
+    }
+  }
+
+  function toggleWebhookType(value) {
+    const urlGroup = document.getElementById('webhookUrlGroup');
+    const telegramGroup = document.getElementById('telegramFields');
+    if (value === 'telegram') {
+      urlGroup.style.display = 'none';
+      telegramGroup.style.display = 'block';
+    } else {
+      urlGroup.style.display = 'block';
+      telegramGroup.style.display = 'none';
     }
   }
 
