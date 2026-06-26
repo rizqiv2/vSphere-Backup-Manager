@@ -755,12 +755,18 @@ def send_email_notification(smtp, run_data, raise_on_error=False):
     msg['Subject'] = subject
     msg.attach(MIMEText(html, 'html'))
     
+    encryption = smtp.get('encryption', 'starttls')
     try:
-        if port == 465:
-            server = smtplib.SMTP_SSL(host, port, timeout=10)
+        import ssl
+        # Create unverified context to bypass certificate issues or protocol restriction errors
+        context = ssl._create_unverified_context()
+        
+        if encryption == 'ssl' or port == 465:
+            server = smtplib.SMTP_SSL(host, port, context=context, timeout=10)
         else:
             server = smtplib.SMTP(host, port, timeout=10)
-            server.starttls()
+            if encryption == 'starttls':
+                server.starttls(context=context)
             
         if user and password:
             server.login(user, password)
@@ -857,7 +863,8 @@ def log_and_notify_run(jid, info, start_time, end_time, status, run_dest):
             'user': get_setting('smtp_user'),
             'password': get_setting('smtp_password'),
             'sender': get_setting('smtp_sender'),
-            'recipient': get_setting('smtp_recipient')
+            'recipient': get_setting('smtp_recipient'),
+            'encryption': get_setting('smtp_encryption', 'starttls')
         }
         try:
             t = threading.Thread(target=send_email_notification, args=(smtp_settings, run_data), daemon=True)
@@ -1396,6 +1403,7 @@ def settings_page():
         set_setting('smtp_enabled', 'true' if 'smtp_enabled' in request.form else 'false')
         set_setting('smtp_host', request.form.get('smtp_host', '').strip())
         set_setting('smtp_port', request.form.get('smtp_port', '587').strip())
+        set_setting('smtp_encryption', request.form.get('smtp_encryption', 'starttls'))
         set_setting('smtp_user', request.form.get('smtp_user', '').strip())
         set_setting('smtp_password', request.form.get('smtp_password', '').strip())
         set_setting('smtp_sender', request.form.get('smtp_sender', '').strip())
@@ -1415,6 +1423,7 @@ def settings_page():
         'smtp_enabled': get_setting('smtp_enabled', 'false') == 'true',
         'smtp_host': get_setting('smtp_host', ''),
         'smtp_port': get_setting('smtp_port', '587'),
+        'smtp_encryption': get_setting('smtp_encryption', 'starttls'),
         'smtp_user': get_setting('smtp_user', ''),
         'smtp_password': get_setting('smtp_password', ''),
         'smtp_sender': get_setting('smtp_sender', ''),
@@ -1444,7 +1453,8 @@ def settings_test_notification():
         'user': request.form.get('smtp_user', '').strip(),
         'password': request.form.get('smtp_password', '').strip(),
         'sender': request.form.get('smtp_sender', '').strip(),
-        'recipient': request.form.get('smtp_recipient', '').strip()
+        'recipient': request.form.get('smtp_recipient', '').strip(),
+        'encryption': request.form.get('smtp_encryption', 'starttls')
     }
     
     test_run_data = {

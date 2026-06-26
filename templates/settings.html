@@ -151,6 +151,17 @@
             </div>
             
             <div class="form-row">
+              <div class="form-group" style="grid-column: span 2;">
+                <label class="form-label" for="smtp_encryption">Connection Security</label>
+                <select id="smtp_encryption" name="smtp_encryption" class="form-control">
+                  <option value="none" {% if settings.smtp_encryption == 'none' %}selected{% endif %}>None (Plain text SMTP relay — common for internal Port 25)</option>
+                  <option value="starttls" {% if settings.smtp_encryption == 'starttls' %}selected{% endif %}>STARTTLS (Secure TLS upgrade — common for Port 587)</option>
+                  <option value="ssl" {% if settings.smtp_encryption == 'ssl' %}selected{% endif %}>SSL / TLS (Direct secure handshake — common for Port 465)</option>
+                </select>
+              </div>
+            </div>
+            
+            <div class="form-row">
               <div class="form-group">
                 <label class="form-label" for="smtp_user">SMTP Username (Optional)</label>
                 <input type="text" id="smtp_user" name="smtp_user" class="form-control" placeholder="e.g. admin@company.com" value="{{ settings.smtp_user }}" autocomplete="off" />
