@@ -788,8 +788,142 @@ def send_email_notification(smtp, run_data, raise_on_error=False):
 
         server.sendmail(sender, recipient, msg.as_string())
         server.quit()
+    except smtplib.SMTPAuthenticationError as e:
+        msg = f"Authentication failed (code {e.smtp_code}): wrong username or password."
+        print(f"Email error: {msg}", file=sys.stderr)
+        if raise_on_error:
+            raise RuntimeError(msg) from e
+    except smtplib.SMTPSenderRefused as e:
+        msg = f"Sender address rejected by server (code {e.smtp_code}): {e.smtp_error.decode(errors='replace')}. Tip: Use port 587 + STARTTLS with your login credentials."
+        print(f"Email error: {msg}", file=sys.stderr)
+        if raise_on_error:
+            raise RuntimeError(msg) from e
+    except smtplib.SMTPRecipientsRefused as e:
+        # e.recipients is a dict: {addr: (code, msg_bytes)}
+        details = "; ".join(
+            f"{addr}: {err[1].decode(errors='replace')} (code {err[0]})"
+            for addr, err in e.recipients.items()
+        )
+        msg = f"Server rejected recipient(s): {details}"
+        print(f"Email error: {msg}", file=sys.stderr)
+        if raise_on_error:
+            raise RuntimeError(msg) from e
+    except smtplib.SMTPConnectError as e:
+        msg = f"Could not connect to {host}:{port} — {e.smtp_error.decode(errors='replace') if isinstance(e.smtp_error, bytes) else e}"
+        print(f"Email error: {msg}", file=sys.stderr)
+        if raise_on_error:
+            raise RuntimeError(msg) from e
+    except smtplib.SMTPException as e:
+        msg = f"SMTP error: {e}"
+        print(f"Email error: {msg}", file=sys.stderr)
+        if raise_on_error:
+            raise RuntimeError(msg) from e
+    except OSError as e:
+        msg = f"Connection failed to {host}:{port} — {e}. Check that the host/port are reachable."
+        print(f"Email error: {msg}", file=sys.stderr)
+        if raise_on_error:
+            raise RuntimeError(msg) from e
     except Exception as e:
         print(f"Error sending email notification: {e}", file=sys.stderr)
+        if raise_on_error:
+            raise
+
+
+def send_email_via_sendmail(cfg, run_data, raise_on_error=False):
+    """Send email using the local sendmail binary (bypasses SMTP auth entirely).
+    Mimics how PHP mail() or Nagios work on servers that have postfix/sendmail locally.
+    """
+    import subprocess
+    from email.mime.text import MIMEText
+    from email.mime.multipart import MIMEMultipart
+
+    sendmail_path = cfg.get('sendmail_path', '/usr/sbin/sendmail').strip() or '/usr/sbin/sendmail'
+    sender = cfg.get('sender', '').strip()
+    recipient = cfg.get('recipient', '').strip()
+
+    if not (sender and recipient):
+        if raise_on_error:
+            raise RuntimeError("Sender and Recipient email addresses are required.")
+        return
+
+    size_gb = run_data['size_bytes'] / (1024 * 1024 * 1024)
+    duration_str = fmt_duration(run_data['duration'])
+    started_str = datetime.fromtimestamp(run_data['started']).strftime('%Y-%m-%d %H:%M:%S')
+    ended_str = datetime.fromtimestamp(run_data['ended']).strftime('%Y-%m-%d %H:%M:%S')
+    status_text = run_data['status'].upper()
+
+    theme_color = "#10b981"
+    bg_banner = "linear-gradient(135deg, #10b981 0%, #059669 100%)"
+    if "failed" in run_data['status'].lower():
+        theme_color = "#ef4444"
+        bg_banner = "linear-gradient(135deg, #ef4444 0%, #dc2626 100%)"
+    elif "error" in run_data['status'].lower():
+        theme_color = "#f59e0b"
+        bg_banner = "linear-gradient(135deg, #f59e0b 0%, #d97706 100%)"
+
+    subject = f"Backup Job {status_text}: {run_data['job_label'] or run_data['job_id'][:8]}"
+
+    # Re-use same HTML body as SMTP version
+    html = f"""<!DOCTYPE html>
+<html><head><meta charset="utf-8">
+<style>
+body{{font-family:system-ui,sans-serif;background:#080a10;color:#f8fafc;margin:0;padding:20px}}
+.card{{background:#0e111a;border:1px solid rgba(255,255,255,0.05);border-radius:12px;overflow:hidden;max-width:600px;margin:20px auto}}
+.banner{{background:{bg_banner};color:#fff;padding:24px;text-align:center}}
+.banner h2{{margin:0;font-size:20px;font-weight:700}}
+.content{{padding:28px}}
+table{{width:100%;border-collapse:collapse}}
+td{{padding:8px 10px;font-size:13px}}
+td:first-child{{color:#94a3b8;font-weight:600;width:30%}}
+td:last-child{{color:#f8fafc}}
+.footer{{padding:16px 28px;background:rgba(8,10,16,0.4);border-top:1px solid rgba(255,255,255,0.05);font-size:11px;color:#64748b;text-align:center}}
+</style></head>
+<body><div class="card">
+<div class="banner"><h2>Backup Job: {status_text}</h2></div>
+<div class="content"><table>
+<tr><td>Job Label</td><td>{run_data['job_label'] or '—'}</td></tr>
+<tr><td>VM Name(s)</td><td><strong>{run_data['vm_name']}</strong></td></tr>
+<tr><td>Size</td><td>{size_gb:.2f} GB</td></tr>
+<tr><td>Duration</td><td>{duration_str}</td></tr>
+<tr><td>Start Time</td><td>{started_str}</td></tr>
+<tr><td>End Time</td><td>{ended_str}</td></tr>
+<tr><td>Status</td><td style="color:{theme_color};font-weight:700">{run_data['status']}</td></tr>
+</table></div>
+<div class="footer">vSphere Backup Manager &middot; Job ID: {run_data['job_id']}</div>
+</div></body></html>"""
+
+    msg = MIMEMultipart()
+    msg['From'] = sender
+    msg['To'] = recipient
+    msg['Subject'] = subject
+    msg.attach(MIMEText(html, 'html'))
+
+    try:
+        # sendmail -t reads recipients from headers, -oi ignores lone dots in body
+        proc = subprocess.run(
+            [sendmail_path, '-t', '-oi'],
+            input=msg.as_bytes(),
+            capture_output=True,
+            timeout=30
+        )
+        if proc.returncode != 0:
+            stderr_out = proc.stderr.decode(errors='replace').strip()
+            err = f"sendmail exited with code {proc.returncode}: {stderr_out}"
+            print(f"Email sendmail error: {err}", file=sys.stderr)
+            if raise_on_error:
+                raise RuntimeError(err)
+    except FileNotFoundError:
+        err = f"sendmail binary not found at '{sendmail_path}'. Install postfix/sendmail or check the path."
+        print(f"Email sendmail error: {err}", file=sys.stderr)
+        if raise_on_error:
+            raise RuntimeError(err)
+    except subprocess.TimeoutExpired:
+        err = f"sendmail timed out after 30 seconds."
+        print(f"Email sendmail error: {err}", file=sys.stderr)
+        if raise_on_error:
+            raise RuntimeError(err)
+    except Exception as e:
+        print(f"Error sending email via sendmail: {e}", file=sys.stderr)
         if raise_on_error:
             raise
 
@@ -872,21 +1006,35 @@ def log_and_notify_run(jid, info, start_time, end_time, status, run_dest):
             
     smtp_enabled = get_setting('smtp_enabled') == 'true'
     if smtp_enabled:
-        smtp_settings = {
-            'host': get_setting('smtp_host'),
-            'port': get_setting('smtp_port'),
-            'user': get_setting('smtp_user'),
-            'password': get_setting('smtp_password'),
-            'sender': get_setting('smtp_sender'),
-            'recipient': get_setting('smtp_recipient'),
-            'encryption': get_setting('smtp_encryption', 'starttls')
-        }
-        try:
-            t = threading.Thread(target=send_email_notification, args=(smtp_settings, run_data), daemon=True)
-            t.start()
-            notification_sent = 1
-        except Exception:
-            pass
+        mail_service = get_setting('smtp_mail_service', 'smtp')
+        if mail_service == 'sendmail':
+            sendmail_cfg = {
+                'sendmail_path': get_setting('sendmail_path', '/usr/sbin/sendmail'),
+                'sender': get_setting('smtp_sender'),
+                'recipient': get_setting('smtp_recipient'),
+            }
+            try:
+                t = threading.Thread(target=send_email_via_sendmail, args=(sendmail_cfg, run_data), daemon=True)
+                t.start()
+                notification_sent = 1
+            except Exception:
+                pass
+        else:
+            smtp_settings = {
+                'host': get_setting('smtp_host'),
+                'port': get_setting('smtp_port'),
+                'user': get_setting('smtp_user'),
+                'password': get_setting('smtp_password'),
+                'sender': get_setting('smtp_sender'),
+                'recipient': get_setting('smtp_recipient'),
+                'encryption': get_setting('smtp_encryption', 'starttls')
+            }
+            try:
+                t = threading.Thread(target=send_email_notification, args=(smtp_settings, run_data), daemon=True)
+                t.start()
+                notification_sent = 1
+            except Exception:
+                pass
             
     if notification_sent and run_id:
         conn = sqlite3.connect(DB_PATH)
@@ -1416,6 +1564,7 @@ def logout():
 def settings_page():
     if request.method == 'POST':
         set_setting('smtp_enabled', 'true' if 'smtp_enabled' in request.form else 'false')
+        set_setting('smtp_mail_service', request.form.get('smtp_mail_service', 'smtp'))
         set_setting('smtp_host', request.form.get('smtp_host', '').strip())
         set_setting('smtp_port', request.form.get('smtp_port', '587').strip())
         set_setting('smtp_encryption', request.form.get('smtp_encryption', 'starttls'))
@@ -1423,6 +1572,7 @@ def settings_page():
         set_setting('smtp_password', request.form.get('smtp_password', '').strip())
         set_setting('smtp_sender', request.form.get('smtp_sender', '').strip())
         set_setting('smtp_recipient', request.form.get('smtp_recipient', '').strip())
+        set_setting('sendmail_path', request.form.get('sendmail_path', '/usr/sbin/sendmail').strip())
         
         set_setting('webhook_enabled', 'true' if 'webhook_enabled' in request.form else 'false')
         set_setting('webhook_url', request.form.get('webhook_url', '').strip())
@@ -1436,6 +1586,7 @@ def settings_page():
         
     opts = {
         'smtp_enabled': get_setting('smtp_enabled', 'false') == 'true',
+        'smtp_mail_service': get_setting('smtp_mail_service', 'smtp'),
         'smtp_host': get_setting('smtp_host', ''),
         'smtp_port': get_setting('smtp_port', '587'),
         'smtp_encryption': get_setting('smtp_encryption', 'starttls'),
@@ -1443,6 +1594,7 @@ def settings_page():
         'smtp_password': get_setting('smtp_password', ''),
         'smtp_sender': get_setting('smtp_sender', ''),
         'smtp_recipient': get_setting('smtp_recipient', ''),
+        'sendmail_path': get_setting('sendmail_path', '/usr/sbin/sendmail'),
         
         'webhook_enabled': get_setting('webhook_enabled', 'false') == 'true',
         'webhook_url': get_setting('webhook_url', ''),
@@ -1462,6 +1614,7 @@ def settings_test_notification():
     webhook_type = request.form.get('webhook_type', 'slack_discord')
     
     smtp_enabled = 'smtp_enabled' in request.form
+    mail_service = request.form.get('smtp_mail_service', 'smtp')
     smtp_settings = {
         'host': request.form.get('smtp_host', '').strip(),
         'port': request.form.get('smtp_port', '587').strip(),
@@ -1471,7 +1624,12 @@ def settings_test_notification():
         'recipient': request.form.get('smtp_recipient', '').strip(),
         'encryption': request.form.get('smtp_encryption', 'starttls')
     }
-    
+    sendmail_cfg = {
+        'sendmail_path': request.form.get('sendmail_path', '/usr/sbin/sendmail').strip() or '/usr/sbin/sendmail',
+        'sender': request.form.get('smtp_sender', '').strip(),
+        'recipient': request.form.get('smtp_recipient', '').strip(),
+    }
+
     test_run_data = {
         'job_id': 'test-run-id-12345',
         'job_label': 'Diagnostic Test Alert',
@@ -1482,19 +1640,22 @@ def settings_test_notification():
         'status': 'finished (Diagnostic Test Success)',
         'size_bytes': 1532984025
     }
-    
+
     webhook_error = None
     email_error = None
-    
+
     if webhook_enabled and webhook_url:
         try:
             send_webhook_notification(webhook_url, webhook_type, test_run_data, raise_on_error=True)
         except Exception as e:
             webhook_error = str(e)
-            
+
     if smtp_enabled:
         try:
-            send_email_notification(smtp_settings, test_run_data, raise_on_error=True)
+            if mail_service == 'sendmail':
+                send_email_via_sendmail(sendmail_cfg, test_run_data, raise_on_error=True)
+            else:
+                send_email_notification(smtp_settings, test_run_data, raise_on_error=True)
         except Exception as e:
             email_error = str(e)
             

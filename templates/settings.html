@@ -139,50 +139,78 @@
           </div>
           
           <div class="settings-toggle-area {% if settings.smtp_enabled %}expanded{% else %}collapsed{% endif %}" id="smtpFields">
-            <div class="form-row">
-              <div class="form-group">
-                <label class="form-label" for="smtp_host">SMTP Server Host</label>
-                <input type="text" id="smtp_host" name="smtp_host" class="form-control" placeholder="e.g. smtp.gmail.com" value="{{ settings.smtp_host }}" />
-              </div>
-              <div class="form-group">
-                <label class="form-label" for="smtp_port">SMTP Port</label>
-                <input type="text" id="smtp_port" name="smtp_port" class="form-control" placeholder="e.g. 587 or 465" value="{{ settings.smtp_port }}" />
-              </div>
-            </div>
-            
+            <!-- Mail Service Selector -->
             <div class="form-row">
               <div class="form-group" style="grid-column: span 2;">
-                <label class="form-label" for="smtp_encryption">Connection Security</label>
-                <select id="smtp_encryption" name="smtp_encryption" class="form-control">
-                  <option value="none" {% if settings.smtp_encryption == 'none' %}selected{% endif %}>None (Plain text SMTP relay — common for internal Port 25)</option>
-                  <option value="starttls" {% if settings.smtp_encryption == 'starttls' %}selected{% endif %}>STARTTLS (Secure TLS upgrade — common for Port 587)</option>
-                  <option value="ssl" {% if settings.smtp_encryption == 'ssl' %}selected{% endif %}>SSL / TLS (Direct secure handshake — common for Port 465)</option>
+                <label class="form-label" for="smtp_mail_service">Mail Service</label>
+                <select id="smtp_mail_service" name="smtp_mail_service" class="form-control" onchange="toggleMailService(this.value)">
+                  <option value="smtp" {% if settings.smtp_mail_service != 'sendmail' %}selected{% endif %}>SMTP — Connect to remote mail server (recommended for most setups)</option>
+                  <option value="sendmail" {% if settings.smtp_mail_service == 'sendmail' %}selected{% endif %}>Sendmail / Local MTA — Use /usr/sbin/sendmail binary on this server</option>
                 </select>
               </div>
             </div>
-            
-            <div class="form-row">
-              <div class="form-group">
-                <label class="form-label" for="smtp_user">SMTP Username (Optional)</label>
-                <input type="text" id="smtp_user" name="smtp_user" class="form-control" placeholder="e.g. admin@company.com" value="{{ settings.smtp_user }}" autocomplete="off" />
+
+            <!-- SMTP-specific fields -->
+            <div id="smtpSpecificFields" style="{% if settings.smtp_mail_service == 'sendmail' %}display:none{% endif %}">
+              <div class="form-row">
+                <div class="form-group">
+                  <label class="form-label" for="smtp_host">SMTP Server Host</label>
+                  <input type="text" id="smtp_host" name="smtp_host" class="form-control" placeholder="e.g. mail.pens.ac.id" value="{{ settings.smtp_host }}" />
+                </div>
+                <div class="form-group">
+                  <label class="form-label" for="smtp_port">SMTP Port</label>
+                  <input type="text" id="smtp_port" name="smtp_port" class="form-control" placeholder="e.g. 25, 587, or 465" value="{{ settings.smtp_port }}" />
+                </div>
               </div>
-              <div class="form-group">
-                <label class="form-label" for="smtp_password">SMTP Password (Optional)</label>
-                <input type="password" id="smtp_password" name="smtp_password" class="form-control" placeholder="••••••••" value="{{ settings.smtp_password }}" autocomplete="new-password" />
+              <div class="form-row">
+                <div class="form-group" style="grid-column: span 2;">
+                  <label class="form-label" for="smtp_encryption">Connection Security</label>
+                  <select id="smtp_encryption" name="smtp_encryption" class="form-control">
+                    <option value="none" {% if settings.smtp_encryption == 'none' %}selected{% endif %}>None (Plain text SMTP relay — common for internal Port 25)</option>
+                    <option value="starttls" {% if settings.smtp_encryption == 'starttls' %}selected{% endif %}>STARTTLS (Secure TLS upgrade — common for Port 587)</option>
+                    <option value="ssl" {% if settings.smtp_encryption == 'ssl' %}selected{% endif %}>SSL / TLS (Direct secure handshake — common for Port 465)</option>
+                  </select>
+                </div>
+              </div>
+              <div class="form-row">
+                <div class="form-group">
+                  <label class="form-label" for="smtp_user">SMTP Username (Optional)</label>
+                  <input type="text" id="smtp_user" name="smtp_user" class="form-control" placeholder="e.g. admin@company.com" value="{{ settings.smtp_user }}" autocomplete="off" />
+                </div>
+                <div class="form-group">
+                  <label class="form-label" for="smtp_password">SMTP Password (Optional)</label>
+                  <input type="password" id="smtp_password" name="smtp_password" class="form-control" placeholder="••••••••" value="{{ settings.smtp_password }}" autocomplete="new-password" />
+                </div>
               </div>
             </div>
 
+            <!-- Sendmail-specific fields -->
+            <div id="sendmailSpecificFields" style="{% if settings.smtp_mail_service != 'sendmail' %}display:none{% endif %}">
+              <div class="form-row">
+                <div class="form-group" style="grid-column: span 2;">
+                  <label class="form-label" for="sendmail_path">Sendmail Binary Path</label>
+                  <input type="text" id="sendmail_path" name="sendmail_path" class="form-control" placeholder="/usr/sbin/sendmail" value="{{ settings.sendmail_path or '/usr/sbin/sendmail' }}" />
+                  <div style="margin-top:6px; font-size:12px; color: var(--text-muted);">
+                    Path to the sendmail binary on this server. This bypasses SMTP authentication — the local MTA handles routing.
+                    Common paths: <code>/usr/sbin/sendmail</code>, <code>/usr/bin/sendmail</code>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            <!-- Common: Sender + Recipient (shared by both methods) -->
             <div class="form-row">
               <div class="form-group">
-                <label class="form-label" for="smtp_sender">Sender Email Address</label>
-                <input type="email" id="smtp_sender" name="smtp_sender" class="form-control" placeholder="e.g. backups@company.com" value="{{ settings.smtp_sender }}" />
+                <label class="form-label" for="smtp_sender">From Email Address</label>
+                <input type="email" id="smtp_sender" name="smtp_sender" class="form-control" placeholder="e.g. admin@pens.ac.id" value="{{ settings.smtp_sender }}" />
               </div>
               <div class="form-group">
                 <label class="form-label" for="smtp_recipient">Recipient Email Address</label>
-                <input type="email" id="smtp_recipient" name="smtp_recipient" class="form-control" placeholder="e.g. admin@company.com" value="{{ settings.smtp_recipient }}" />
+                <input type="email" id="smtp_recipient" name="smtp_recipient" class="form-control" placeholder="e.g. rizqi@staff.pens.ac.id" value="{{ settings.smtp_recipient }}" />
               </div>
             </div>
           </div>
+
         </div>
       </div>
 
@@ -260,6 +288,18 @@
 
 {% block scripts %}
 <script>
+  function toggleMailService(value) {
+    const smtpFields = document.getElementById('smtpSpecificFields');
+    const sendmailFields = document.getElementById('sendmailSpecificFields');
+    if (value === 'sendmail') {
+      smtpFields.style.display = 'none';
+      sendmailFields.style.display = 'block';
+    } else {
+      smtpFields.style.display = 'block';
+      sendmailFields.style.display = 'none';
+    }
+  }
+
   function toggleSmtp(checked) {
     const fields = document.getElementById('smtpFields');
     const card = document.getElementById('smtpCard');
