@@ -212,8 +212,19 @@ def register_scheduler_job(info):
         day_val = monthly_day
         if str(day_val).isdigit():
             day_val = max(1, min(28, int(day_val)))
+        
+        start_month = info.get('schedule_start_month')
+        if not start_month:
+            start_month = datetime.now().month
+            info['schedule_start_month'] = start_month
+            try:
+                save_jobs_db()
+            except Exception:
+                pass
+        
+        months = sorted([(start_month + i * 3 - 1) % 12 + 1 for i in range(4)])
         trigger = CronTrigger(
-            month='*/3',
+            month=",".join(map(str, months)),
             day=day_val,
             hour=int(hour), minute=int(minute)
         )
@@ -222,8 +233,19 @@ def register_scheduler_job(info):
         day_val = monthly_day
         if str(day_val).isdigit():
             day_val = max(1, min(28, int(day_val)))
+            
+        start_month = info.get('schedule_start_month')
+        if not start_month:
+            start_month = datetime.now().month
+            info['schedule_start_month'] = start_month
+            try:
+                save_jobs_db()
+            except Exception:
+                pass
+                
+        months = sorted([(start_month + i * 6 - 1) % 12 + 1 for i in range(2)])
         trigger = CronTrigger(
-            month='*/6',
+            month=",".join(map(str, months)),
             day=day_val,
             hour=int(hour), minute=int(minute)
         )
@@ -1444,6 +1466,7 @@ def edit_job(jobid):
                 except Exception:
                     pass
             info['schedule_id'] = None
+            info['schedule_start_month'] = None
 
             # Update job config
             info['label'] = label
