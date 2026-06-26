@@ -445,6 +445,16 @@ def job_to_display(jid, info):
         vm_display = f"{len(vm_names)} VMs ({', '.join(vm_names[:3])}{'...' if len(vm_names) > 3 else ''})"
     else:
         vm_display = info.get('vm_name', '—')
+
+    next_run = None
+    if HAS_SCHEDULER and scheduler and info.get('schedule_id'):
+        try:
+            sched_job = scheduler.get_job(f'backup-{jid}')
+            if sched_job and sched_job.next_run_time:
+                next_run = sched_job.next_run_time.strftime('%Y-%m-%d %H:%M:%S')
+        except Exception:
+            pass
+
     return {
         'id':            jid,
         'label':         info.get('label', ''),
@@ -468,6 +478,7 @@ def job_to_display(jid, info):
         'weekly_day':      info.get('weekly_day'),
         'vm_names':        vm_names,
         'use_cbt':         info.get('use_cbt', False),
+        'next_run':        next_run,
     }
 
 

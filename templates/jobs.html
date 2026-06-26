@@ -177,6 +177,12 @@
               </span>
               {% if job.schedule_id %}
                 <span class="badge badge-green" style="font-size: 10px; padding: 2px 6px; display: inline-block;">Active</span>
+                {% if job.next_run %}
+                  <div style="font-size: 11px; color: var(--accent-2); margin-top: 4px; font-weight: 600; display: flex; align-items: center; gap: 4px;">
+                    <span style="font-size: 11px; line-height: 1;">&#x23F1;&#xFE0E;</span>
+                    Next: {{ job.next_run }}
+                  </div>
+                {% endif %}
               {% else %}
                 <span class="badge badge-red" style="font-size: 10px; padding: 2px 6px; display: inline-block;">Cancelled</span>
               {% endif %}

@@ -233,6 +233,15 @@
         {% endif %}
       </div>
     </div>
+    {% if job.schedule_type and job.schedule_type != 'now' and job.next_run %}
+    <div class="detail-item">
+      <div class="detail-item-label">Next Run Time</div>
+      <div class="detail-item-val mono" style="font-size:13.5px; color: var(--accent-2); display: flex; align-items: center; gap: 6px;">
+        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" style="color: var(--accent-2);"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
+        {{ job.next_run }}
+      </div>
+    </div>
+    {% endif %}
     <div class="detail-item">
       <div class="detail-item-label">Started</div>
       <div class="detail-item-val mono" style="font-size:13px;">{{ job.started_fmt }}</div>
