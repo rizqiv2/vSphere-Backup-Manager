@@ -17,3 +17,6 @@ logs/
 # OS metadata
 .DS_Store
 Thumbs.db
+
+#db
+jobs.db
