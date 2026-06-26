@@ -1,19 +1,23 @@
 # vSphere Backup Manager
 
-An enterprise-ready web interface and CLI tool to automate, schedule, and manage snapshot-based backups for virtual machines on VMware vCenter/ESXi. Designed for performance, reliability, and security, it includes advanced features such as Change-based checksumming, automated retention policies, and grouped batch executions.
+An enterprise-ready web interface and CLI tool to automate, schedule, and manage snapshot-based backups for virtual machines on VMware vCenter/ESXi. Designed for performance, reliability, and security.
 
 ---
 
 ## Key Features
 
-- **Grouped Sequential Batch Backups**: Select multiple VMs to execute sequentially in a single job. This protects vCenter/ESXi storage datastores from network I/O congestion and merges execution logs and progress indicators into a single view.
+- **Grouped Sequential Batch Backups**: Select multiple VMs to execute sequentially in a single job. Execution logs and progress indicators are merged into a single view. Multiple batch jobs can run **simultaneously** without interference — each has isolated thread-local logging, independent progress tracking, and separate SQLite state.
 - **SHA-256 Checksum Verification & Cataloging**: Computes SHA-256 signatures immediately after each VMDK/VMX file download and generates a machine-readable `manifest.json` catalog alongside each backup run.
-- **Pre-Upload Validation**: Automatically validates local checksums prior to remote transfers (e.g., SFTP) to protect storage vaults against silent write errors or network package loss.
+- **Pre-Upload Validation**: Automatically validates local checksums prior to remote transfers (e.g., SFTP) to protect storage vaults against silent write errors or network packet loss.
 - **On-the-Fly ZST Verification**: Supports stream-decompression on the fly to verify `.zst` archives against original manifest signatures without needing local disk extraction.
 - **Safe Force Stop (Cancellation)**: Safely halt running backups via the Web UI. The engine immediately aborts socket downloads and **automatically cleans up the VM snapshot** on the ESXi host before gracefully terminating.
-- **Automated Retention Policies**: Define count-based (`keep_count` to keep the last $N$ backups) or age-based (`keep_days` to clean up backups older than $N$ days) retention policies per VM to manage storage space automatically.
-- **Resilient Scheduling**: Uses APScheduler to schedule daily, weekly, monthly (with specific weekday or day number rules), or interval backups. Schedules are written to disk (`jobs.json`) and automatically re-registered upon app restarts.
-- **Integrated NFS Mount Manager**: View, mount, and manage NFS/CIFS shares directly from the Web GUI, showing real-time mount statuses, total size, used capacity, and free disk space.
+- **Automated Retention Policies**: Define count-based (`keep_count` — keep the last N backups) or age-based (`keep_days` — clean up backups older than N days) retention policies per VM to manage storage automatically.
+- **Resilient Scheduling**: Uses APScheduler to schedule daily, weekly, monthly, interval, 3-monthly, 6-monthly, or yearly backups. Schedules are persisted in `jobs.db` and automatically re-registered on app restarts.
+- **Telegram Bot Alerts**: Send rich formatted backup status notifications via a Telegram Bot directly to any group or channel — no open SMTP ports required. Configurable per alert level (all / failures only).
+- **SMTP & Sendmail Notifications**: Send HTML-formatted backup completion emails via an SMTP relay or the system `sendmail` binary.
+- **Reports & Analytics Dashboard**: Visual Chart.js trends for backup size and duration over time, with per-run history log table and success-rate statistics.
+- **Integrated NFS Mount Manager**: View, mount, and manage NFS/CIFS shares directly from the Web GUI, showing real-time mount status, total size, used capacity, and free disk space.
+- **CBT Incremental Backups**: Optional Changed Block Tracking (CBT) mode drastically reduces transfer size for recurring scheduled jobs by downloading only changed disk extents.
 
 ---
 
@@ -21,11 +25,13 @@ An enterprise-ready web interface and CLI tool to automate, schedule, and manage
 
 - Python 3.8+
 - System packages listed in `requirements.txt`:
-  - `pyvmomi` (VMware vSphere API Python SDK)
-  - `requests` (vCenter HTTPS folder API transfers)
-  - `paramiko` (SFTP remote storage replication)
-  - `zstandard` (High-ratio backup compression)
-  - `APScheduler` (Recurring backups scheduling)
+  - `pyvmomi` — VMware vSphere API Python SDK
+  - `requests` — vCenter HTTPS folder API transfers
+  - `paramiko` — SFTP remote storage replication
+  - `zstandard` — High-ratio backup compression
+  - `APScheduler` — Recurring backup scheduling
+  - `flask` — Web UI framework
+  - `gunicorn` — Production WSGI server
 
 ---
 
@@ -46,7 +52,7 @@ An enterprise-ready web interface and CLI tool to automate, schedule, and manage
    - **Windows**:
      ```powershell
      python -m venv venv
-     .\venv\Scripts\Activate.ps1
+     .\\venv\\Scripts\\Activate.ps1
      ```
 
 3. **Install dependencies**:
@@ -75,7 +81,7 @@ PM2 natively supports Python applications and keeps the server running across re
    pm2 start ecosystem.config.js
    ```
 
-   *(Optional)* If you are running inside a Python virtual environment (e.g. `venv`), edit `ecosystem.config.js` to point the `interpreter` to your venv's python executable:
+   *(Optional)* If you are running inside a Python virtual environment (e.g. `venv`), edit `ecosystem.config.js` to point the `interpreter` to your venv's Python executable:
    ```javascript
    interpreter: './venv/bin/python3'
    ```
@@ -86,6 +92,47 @@ PM2 natively supports Python applications and keeps the server running across re
    - **Restart Application**: `pm2 restart vsphere-backup-manager`
    - **Stop Application**: `pm2 stop vsphere-backup-manager`
    - **Enable Auto-start on Boot**: Run `pm2 startup` and execute the command it prints, followed by `pm2 save`.
+
+---
+
+## Notification Setup
+
+### Telegram Bot (Recommended — works on port 443, no SMTP server needed)
+
+1. Create a bot via [@BotFather](https://t.me/BotFather) on Telegram — it will give you a **Bot Token**.
+2. Add the bot to a group or channel and send any message to it.
+3. Find your **Chat ID** using the Telegram API:
+   - Open in browser: `https://api.telegram.org/bot<YOUR_TOKEN>/getUpdates`
+   - Look for `"chat":{"id": -xxxxxxxxxx}` in the response.
+4. Open **Settings → Notifications** in the Web UI:
+   - Set **Webhook Payload Format** to `Telegram Bot Alert`.
+   - Enter your **Bot Token** and **Chat ID**.
+   - Click **Send Test Notification** to verify.
+
+### SMTP Email
+
+1. Open **Settings → Notifications** in the Web UI.
+2. Enable **Email Notifications** and fill in your SMTP host, port, credentials, sender, and recipient.
+3. Click **Send Test Email** to verify before saving.
+
+### Webhook (Generic HTTP POST)
+
+1. Open **Settings → Notifications** in the Web UI.
+2. Enter a webhook URL (Slack, Teams, Discord, custom endpoint, etc.).
+3. Choose the payload format (`JSON`, `Form`, or `Slack`).
+4. Click **Send Test Notification** to verify.
+
+---
+
+## Alert Levels
+
+Configure in **Settings** to control when notifications are sent:
+
+| Level | Triggers on |
+|---|---|
+| `all` | Every backup completion (success, warning, or failure) |
+| `failures` | Only on `failed` or `finished with errors` status |
+| `disabled` | Never send notifications |
 
 ---
 
@@ -159,7 +206,7 @@ scp -r ./backup-20260623020000/<datastore>/<VM_NAME>/ \
 
 ```powershell
 # Copy files to ESXi datastore via datastore browser
-Copy-DatastoreItem -Item ".\*.vmdk" -Destination "[datastore1] <VM_NAME>/"
+Copy-DatastoreItem -Item ".\\*.vmdk" -Destination "[datastore1] <VM_NAME>/"
 ```
 
 #### Step 4 — Register the VM
@@ -216,6 +263,31 @@ To restore a backup as a **separate new VM** without affecting the original:
 
 ## Safety & Architecture
 
-1. **Snapshot Isolation**: The backup engine creates a temporary snapshot on the target VM, downloads the locked base files (such as `.vmdk` descriptors, `-flat.vmdk` disk data, and `.vmx` configurations) directly from the Datastore HTTP gateway, and deletes the snapshot immediately afterwards.
-2. **SSL Configuration**: Custom certificate verification options (`--no-verify-ssl` or Web checkbox) allow connecting to environments using self-signed vCenter certificates.
-3. **Database Integrity**: Job records, statuses, and scheduling data are written safely using thread-safe synchronization locks to prevent state corruption.
+### 1. Snapshot Isolation
+The backup engine creates a temporary snapshot on the target VM, downloads the locked base files (`.vmdk` descriptors, `-flat.vmdk` disk data, and `.vmx` configurations) directly from the vCenter Datastore HTTP gateway, and deletes the snapshot immediately afterwards. Even on forced stop, the snapshot cleanup routine runs.
+
+### 2. Thread-Safe Concurrent Job Execution
+
+Two entirely different types of concurrency safety are in place:
+
+**a) Multiple different jobs running simultaneously**
+
+Each job runs in its own background thread. Log output uses a **thread-local path registry** (`threading.local()` in `backup_core.py`) — the overridden `print()` function checks the calling thread's registered log path and writes directly to that file, bypassing any global `sys.stdout` redirection. This eliminates the classic `ValueError: I/O operation on closed file` race condition where one job closing its log file would crash another job's write.
+
+**b) Duplicate runs of the same job prevented**
+
+An in-memory `active_job_threads` dictionary tracks which job IDs are currently executing and in which thread. Before starting execution, `run_job_thread` checks this registry. If the same job is already alive in another thread (e.g., a scheduled trigger fires at the exact same moment as a manual "Run Now" click), the duplicate is **silently aborted** without affecting the primary run.
+
+### 3. SQLite Persistence & Multi-Worker Sync
+
+Job records, status, schedules, and configuration settings are stored in `jobs.db` (SQLite). The application supports running behind Gunicorn with multiple worker processes:
+
+- **Real-time progress writes**: Every progress callback update from an active backup job writes directly to SQLite (`save_job_to_db_direct`), not just on completion.
+- **Route-level refresh**: The `/jobs`, `/job/<id>`, and `/api/job/<id>/status` routes call `load_jobs_db()` before rendering, syncing state from SQLite across all Gunicorn workers.
+- **In-place merge strategy**: When loading from DB, running jobs in the current process are never overwritten by older DB snapshots from other workers.
+
+### 4. SSL Configuration
+Custom certificate verification options (`--no-verify-ssl` or Web checkbox) allow connecting to environments using self-signed vCenter certificates.
+
+### 5. Pre-flight & Post-flight Disk Checks
+Before every backup, the engine checks for and resolves `consolidationNeeded` conditions on the VM. After snapshot removal, another consolidation check runs automatically to keep the datastore clean.
