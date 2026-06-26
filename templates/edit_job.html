@@ -230,8 +230,13 @@
             </div>
           </div>
 
-          <div class="form-group">
-            <label class="form-label" for="replication_dest">Replication target path (optional NFS/local)</label>
+          <div class="form-check" style="margin-bottom:15px;">
+            <input type="checkbox" id="enable_replication" name="enable_replication" onchange="toggleReplication()" {% if job.replication_dest %}checked{% endif %} />
+            <label for="enable_replication">Enable replication to secondary target (NFS/local)</label>
+          </div>
+
+          <div class="form-group" id="replication_section" style="{% if not job.replication_dest %}display:none;{% endif %}">
+            <label class="form-label" for="replication_dest">Replication target path</label>
             <input id="replication_dest" class="form-control" type="text" name="replication_dest" value="{{ job.replication_dest }}" placeholder="e.g. /mnt/nfs-backup-replica" />
             
             <div class="nfs-targets" id="repNfsTargets" style="display:none; margin-top: 10px;">
@@ -648,6 +653,17 @@
     } else {
       dayNumRow.style.display = 'none';
       weekdayRow.style.display = '';
+    }
+  }
+
+  function toggleReplication() {
+    const chk = document.getElementById('enable_replication');
+    const sec = document.getElementById('replication_section');
+    if (chk.checked) {
+      sec.style.display = '';
+    } else {
+      sec.style.display = 'none';
+      document.getElementById('replication_dest').value = '';
     }
   }
 </script>

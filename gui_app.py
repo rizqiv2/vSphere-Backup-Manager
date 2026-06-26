@@ -1179,7 +1179,7 @@ def job_to_display(jid, info):
         'started_fmt':   fmt_time(info.get('started')),
         'dest':          info.get('dest', ''),
         'run_dest':      info.get('run_dest', ''),
-        'replication_dest': info.get('replication_dest', ''),
+        'replication_dest': info.get('replication_dest') or '',
         'compress':      info.get('compress', False),
         'sftp_host':     info.get('sftp_host', ''),
         'schedule_type': info.get('schedule_type', 'now'),
@@ -1439,7 +1439,7 @@ def run_job_thread_impl(jid):
                 
                 # Replicate successful backup if replication_dest is configured
                 rep_dest = info.get('replication_dest')
-                if rep_dest:
+                if rep_dest and str(rep_dest).strip() and str(rep_dest).strip().lower() != 'none':
                     rep_vm_dest = os.path.join(rep_dest, vm, f"backup-{run_timestamp}")
                     replicate_backup_folder(vm_dest, rep_vm_dest, log_path=log_path)
             except Exception as e:
@@ -1467,10 +1467,11 @@ def run_job_thread_impl(jid):
                 enforce_retention_policy(vm_info, log_path=log_path)
                 
                 # Enforce retention policy on replication target if configured
-                if info.get('replication_dest'):
+                rep_dest = info.get('replication_dest')
+                if rep_dest and str(rep_dest).strip() and str(rep_dest).strip().lower() != 'none':
                     rep_vm_info = {
                         'vm_name': vm,
-                        'dest': info['replication_dest'],
+                        'dest': rep_dest,
                         'retention_type': info.get('retention_type', 'keep_all'),
                         'retention_value': info.get('retention_value', 5)
                     }
@@ -1536,7 +1537,7 @@ def run_job_thread_impl(jid):
             
             # Replicate successful backup if replication_dest is configured
             rep_dest = info.get('replication_dest')
-            if rep_dest:
+            if rep_dest and str(rep_dest).strip() and str(rep_dest).strip().lower() != 'none':
                 rep_run_dest = os.path.join(rep_dest, info['vm_name'], f"backup-{run_timestamp}")
                 replicate_backup_folder(run_dest, rep_run_dest, log_path=log_path)
         except Exception as e:
@@ -1552,10 +1553,11 @@ def run_job_thread_impl(jid):
             enforce_retention_policy(info, log_path=log_path)
             
             # Enforce retention policy on replication target if configured
-            if info.get('replication_dest'):
+            rep_dest = info.get('replication_dest')
+            if rep_dest and str(rep_dest).strip() and str(rep_dest).strip().lower() != 'none':
                 rep_info = {
                     'vm_name': info['vm_name'],
-                    'dest': info['replication_dest'],
+                    'dest': rep_dest,
                     'retention_type': info.get('retention_type', 'keep_all'),
                     'retention_value': info.get('retention_value', 5)
                 }
@@ -1879,7 +1881,14 @@ def create_job():
     if request.method == 'POST':
         vm_name          = request.form.get('vm_name', '').strip()
         dest             = request.form.get('dest', './backups').strip()
-        replication_dest = request.form.get('replication_dest', '').strip() or None
+        # Check if replication is enabled
+        enable_replication = 'enable_replication' in request.form
+        if enable_replication:
+            replication_dest = request.form.get('replication_dest', '').strip()
+            if not replication_dest or replication_dest.lower() == 'none':
+                replication_dest = None
+        else:
+            replication_dest = None
         compress         = 'compress' in request.form
         no_verify_ssl    = 'no_verify_ssl' in request.form
         sftp_host        = request.form.get('sftp_host', '').strip() or None
@@ -1996,7 +2005,14 @@ def batch_jobs():
     if request.method == 'POST':
         vm_names         = request.form.getlist('vms')
         dest             = request.form.get('dest', './backups').strip()
-        replication_dest = request.form.get('replication_dest', '').strip() or None
+        # Check if replication is enabled
+        enable_replication = 'enable_replication' in request.form
+        if enable_replication:
+            replication_dest = request.form.get('replication_dest', '').strip()
+            if not replication_dest or replication_dest.lower() == 'none':
+                replication_dest = None
+        else:
+            replication_dest = None
         compress         = 'compress' in request.form
         no_verify_ssl    = 'no_verify_ssl' in request.form
         disk_strategy    = request.form.get('disk_strategy', 'all')
@@ -2375,7 +2391,14 @@ def edit_job(jobid):
 
         if request.method == 'POST':
             dest             = request.form.get('dest', './backups').strip()
-            replication_dest = request.form.get('replication_dest', '').strip() or None
+            # Check if replication is enabled
+            enable_replication = 'enable_replication' in request.form
+            if enable_replication:
+                replication_dest = request.form.get('replication_dest', '').strip()
+                if not replication_dest or replication_dest.lower() == 'none':
+                    replication_dest = None
+            else:
+                replication_dest = None
             compress         = 'compress' in request.form
             no_verify_ssl    = 'no_verify_ssl' in request.form
             schedule_type    = request.form.get('schedule_type', 'now')
