@@ -1034,7 +1034,16 @@ td:last-child{{color:#f8fafc}}
 
 
 def log_and_notify_run(jid, info, start_time, end_time, status, run_dest):
-    size_bytes = get_dir_size(run_dest) if run_dest else 0
+    vm_names = info.get('vm_names')
+    if vm_names:
+        # Sum of sizes of each VM's backup folder
+        run_timestamp = datetime.fromtimestamp(info.get('started', start_time)).strftime('%Y%m%d%H%M%S')
+        size_bytes = 0
+        for vm in vm_names:
+            vm_dest = os.path.join(info.get('dest', './backups'), vm, f"backup-{run_timestamp}")
+            size_bytes += get_dir_size(vm_dest)
+    else:
+        size_bytes = get_dir_size(run_dest) if run_dest else 0
     duration = end_time - start_time
     
     vm_names = info.get('vm_names')
