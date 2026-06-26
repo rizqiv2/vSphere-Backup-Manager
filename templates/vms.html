@@ -313,15 +313,20 @@
     <button class="filter-chip" id="filter-suspended" onclick="setFilter('suspended')">
       <span style="display:inline-block; width:8px; height:8px; border-radius:50%; background:var(--warning); margin-right:6px; vertical-align:middle;"></span>Suspended
     </button>
+    <button class="filter-chip" id="filter-unscheduled" onclick="setFilter('unscheduled')">
+      <span style="display:inline-block; width:8px; height:8px; border-radius:50%; background:var(--accent-2); margin-right:6px; vertical-align:middle;"></span>Unscheduled
+    </button>
   </div>
 
   <!-- VM Cards grid -->
   <div class="vms-grid" id="vmGrid">
     {% for vm in vms %}
+    {% set is_scheduled = vm.name in scheduled_vms %}
     <div class="vm-card"
          data-name="{{ vm.name|lower }}"
          data-vmname="{{ vm.name }}"
          data-power="{{ vm.power_state }}"
+         data-scheduled="{{ '1' if is_scheduled else '0' }}"
          onclick="handleCardClick(this, event)">
 
       <!-- Selection checkbox overlay -->
@@ -353,7 +358,12 @@
 
       <div class="vm-card-header">
         <div>
-          <div class="vm-name">{{ vm.name }}</div>
+          <div class="vm-name">
+            {{ vm.name }}
+            {% if is_scheduled %}
+              <span style="display:inline-block; font-size: 11px; margin-left: 6px; color: var(--accent-2); vertical-align: middle;" title="Has active schedule">&#x1F4C5;&#xFE0E;</span>
+            {% endif %}
+          </div>
           <div class="vm-os">{{ vm.guest_os or 'Unknown OS' }}</div>
         </div>
         {% if vm.power_state == 'poweredOn' %}
@@ -455,7 +465,14 @@
   function filterVMs() {
     const q = document.getElementById('vmSearch').value.toLowerCase();
     document.querySelectorAll('.vm-card').forEach(card => {
-      const matchFilter = activeFilter === 'all' || card.dataset.power === activeFilter;
+      let matchFilter = false;
+      if (activeFilter === 'all') {
+        matchFilter = true;
+      } else if (activeFilter === 'unscheduled') {
+        matchFilter = card.dataset.scheduled === '0';
+      } else {
+        matchFilter = card.dataset.power === activeFilter;
+      }
       const matchSearch = card.dataset.name.includes(q);
       card.style.display = (matchFilter && matchSearch) ? '' : 'none';
     });

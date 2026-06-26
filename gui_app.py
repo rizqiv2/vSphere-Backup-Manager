@@ -973,7 +973,28 @@ def vms():
         force=force,
     )
     cache_age = int(time.time() - cache_ts) if cache_ts else None
-    return render_template('vms.html', vms=vm_list, error=error, cache_age=cache_age)
+
+    # Calculate set of scheduled VMs
+    active_scheduled_vms = set()
+    with jobs_db_lock:
+        for job in jobs.values():
+            if job.get('schedule_type') and job.get('schedule_type') != 'now' and job.get('schedule_id'):
+                vm_names = job.get('vm_names')
+                if vm_names:
+                    for vm in vm_names:
+                        active_scheduled_vms.add(vm)
+                else:
+                    vm_name = job.get('vm_name')
+                    if vm_name:
+                        active_scheduled_vms.add(vm_name)
+
+    return render_template(
+        'vms.html',
+        vms=vm_list,
+        error=error,
+        cache_age=cache_age,
+        scheduled_vms=list(active_scheduled_vms)
+    )
 
 
 @app.route('/api/vms')
