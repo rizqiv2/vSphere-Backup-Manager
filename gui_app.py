@@ -758,19 +758,34 @@ def send_email_notification(smtp, run_data, raise_on_error=False):
     encryption = smtp.get('encryption', 'starttls')
     try:
         import ssl
-        # Create unverified context to bypass certificate issues or protocol restriction errors
-        context = ssl._create_unverified_context()
-        
-        if encryption == 'ssl' or port == 465:
-            server = smtplib.SMTP_SSL(host, port, context=context, timeout=10)
+
+        # Build a permissive SSL context that accepts TLS 1.2+ and skips cert verification.
+        # This covers old/self-signed mail servers while still using encrypted transport.
+        # NOTE: TLSv1 and TLSv1_1 are disabled by default in modern OpenSSL builds, so
+        # setting minimum_version to TLSv1_2 is the correct approach to avoid
+        # [SSL: UNSUPPORTED_PROTOCOL] errors while remaining compatible with all
+        # major SMTP providers (Gmail, Office365, Postfix, Exim, etc.)
+        context = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
+        context.check_hostname = False
+        context.verify_mode = ssl.CERT_NONE
+        context.minimum_version = ssl.TLSVersion.TLSv1_2
+
+        if encryption == 'ssl':
+            # Direct SSL/TLS handshake (port 465)
+            server = smtplib.SMTP_SSL(host, port, context=context, timeout=15)
+        elif encryption == 'starttls':
+            # Plain connection upgraded to TLS via STARTTLS (port 587)
+            server = smtplib.SMTP(host, port, timeout=15)
+            server.ehlo()
+            server.starttls(context=context)
+            server.ehlo()
         else:
-            server = smtplib.SMTP(host, port, timeout=10)
-            if encryption == 'starttls':
-                server.starttls(context=context)
-            
+            # No encryption – plain SMTP relay (port 25 / internal)
+            server = smtplib.SMTP(host, port, timeout=15)
+
         if user and password:
             server.login(user, password)
-            
+
         server.sendmail(sender, recipient, msg.as_string())
         server.quit()
     except Exception as e:
