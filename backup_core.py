@@ -9,8 +9,28 @@ import sys
 import time
 import urllib.parse
 from datetime import datetime
-from contextlib import redirect_stdout, redirect_stderr
 from pathlib import Path
+import threading
+import builtins
+
+# Thread-local storage for log file path to ensure print() statements are thread-safe and write to the correct log file
+thread_local_log = threading.local()
+
+def print(*args, **kwargs):
+    # Check if this thread has a thread-local log path
+    log_path = getattr(thread_local_log, 'path', None)
+    if log_path:
+        try:
+            sep = kwargs.get('sep', ' ')
+            end = kwargs.get('end', '\n')
+            msg = sep.join(str(arg) for arg in args) + end
+            with open(log_path, 'a', encoding='utf-8') as f:
+                f.write(msg)
+        except Exception as e:
+            builtins.print(f"Fallback log error: {e}", file=sys.stderr)
+            builtins.print(*args, **kwargs)
+    else:
+        builtins.print(*args, **kwargs)
 
 import requests
 from pyVim.connect import SmartConnect, Disconnect
@@ -580,22 +600,17 @@ def run_backup(host, user, password, vm_name, dest, compress=False, no_verify_ss
              Falls back to full download if CBT state is unavailable.
     """
     if log_path:
-        logfile = open(log_path, 'a', encoding='utf-8', buffering=1)
-        def _wrap():
-            with redirect_stdout(logfile), redirect_stderr(logfile):
-                return _run_backup_impl(host, user, password, vm_name, dest, compress, no_verify_ssl,
-                                        sftp_host, sftp_user, sftp_password, sftp_key,
-                                        progress_cb=progress_cb, disk_filter=disk_filter, job_id=job_id,
-                                        is_cancelled_cb=is_cancelled_cb, use_cbt=use_cbt)
-        try:
-            return _wrap()
-        finally:
-            logfile.close()
+        thread_local_log.path = log_path
     else:
+        thread_local_log.path = None
+
+    try:
         return _run_backup_impl(host, user, password, vm_name, dest, compress, no_verify_ssl,
                                 sftp_host, sftp_user, sftp_password, sftp_key,
                                 progress_cb=progress_cb, disk_filter=disk_filter, job_id=job_id,
                                 is_cancelled_cb=is_cancelled_cb, use_cbt=use_cbt)
+    finally:
+        thread_local_log.path = None
 
 
 def _run_backup_impl(host, user, password, vm_name, dest, compress, no_verify_ssl,
