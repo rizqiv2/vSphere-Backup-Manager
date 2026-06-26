@@ -248,6 +248,12 @@
       </div>
     </div>
     <div class="detail-item">
+      <div class="detail-item-label">Replication Target</div>
+      <div class="detail-item-val mono" style="font-size:12px; word-break:break-all; cursor:pointer;" data-copy="{{ job.replication_dest or '' }}" title="Click to copy">
+        {{ job.replication_dest or '—' }}
+      </div>
+    </div>
+    <div class="detail-item">
       <div class="detail-item-label">Retention Policy</div>
       <div class="detail-item-val" style="font-size:13px;">
         {% if job.retention_type == 'keep_count' %}

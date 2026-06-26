@@ -230,6 +230,16 @@
             </div>
           </div>
 
+          <div class="form-group">
+            <label class="form-label" for="replication_dest">Replication target path (optional NFS/local)</label>
+            <input id="replication_dest" class="form-control" type="text" name="replication_dest" value="{{ job.replication_dest }}" placeholder="e.g. /mnt/nfs-backup-replica" />
+            
+            <div class="nfs-targets" id="repNfsTargets" style="display:none; margin-top: 10px;">
+              <div style="font-size:11px;font-weight:700;color:var(--text-secondary);text-transform:uppercase;">Quick-Select Replication Target</div>
+              <div class="nfs-mount-list" id="repNfsMountList"></div>
+            </div>
+          </div>
+
           <div style="display:flex; gap:20px; flex-wrap:wrap; margin-top:16px;">
             <label style="display:flex; align-items:center; gap:8px; font-size:13.5px; cursor:pointer;">
               <input type="checkbox" name="compress" {% if job.compress %}checked{% endif %} style="width:18px;height:18px;accent-color:var(--accent);" />
@@ -573,7 +583,11 @@
       if (!mounts || !mounts.length) return;
       const wrap = document.getElementById('nfsTargets');
       const list = document.getElementById('nfsMountList');
+      const repWrap = document.getElementById('repNfsTargets');
+      const repList = document.getElementById('repNfsMountList');
+      
       mounts.forEach(m => {
+        // Destination Button
         const btn = document.createElement('button');
         btn.type = 'button';
         btn.className = 'btn btn-secondary btn-sm';
@@ -584,8 +598,21 @@
           btn.style.borderColor = 'var(--accent)';
         };
         list.appendChild(btn);
+
+        // Replication Button
+        const repBtn = document.createElement('button');
+        repBtn.type = 'button';
+        repBtn.className = 'btn btn-secondary btn-sm';
+        repBtn.innerHTML = `<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="margin-right: 6px; vertical-align: middle;"><rect x="2" y="2" width="20" height="8" rx="2" ry="2"/><rect x="2" y="14" width="20" height="8" rx="2" ry="2"/><line x1="6" y1="6" x2="6.01" y2="6"/><line x1="6" y1="18" x2="6.01" y2="18"/></svg> ${m.mountpoint} <span style="color:var(--text-muted);font-size:11px;margin-left:4px;">${m.free_gb}GB free</span>`;
+        repBtn.onclick = () => {
+          document.getElementById('replication_dest').value = m.mountpoint;
+          repList.querySelectorAll('button').forEach(b => b.style.borderColor = '');
+          repBtn.style.borderColor = 'var(--accent)';
+        };
+        repList.appendChild(repBtn);
       });
       wrap.style.display = '';
+      if (repWrap) repWrap.style.display = '';
     })
     .catch(() => {});
 

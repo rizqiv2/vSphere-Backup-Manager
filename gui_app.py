@@ -453,6 +453,7 @@ def job_to_display(jid, info):
         'started_fmt':   fmt_time(info.get('started')),
         'dest':          info.get('dest', ''),
         'run_dest':      info.get('run_dest', ''),
+        'replication_dest': info.get('replication_dest', ''),
         'compress':      info.get('compress', False),
         'sftp_host':     info.get('sftp_host', ''),
         'schedule_type': info.get('schedule_type', 'now'),
@@ -561,6 +562,51 @@ def enforce_retention_policy(info, log_path=None):
         log_msg(f"ERROR during retention cleanup: {e}")
 
 
+def replicate_backup_folder(src_dir, dest_dir, log_path=None):
+    """
+    Copy all files from primary backup folder to replication target folder,
+    then verify checksums.
+    """
+    def log_msg(msg):
+        print(msg)
+        if log_path:
+            try:
+                with open(log_path, 'a', encoding='utf-8') as f:
+                    f.write(f"[Replication] {msg}\n")
+            except Exception:
+                pass
+
+    log_msg(f"Starting replication from '{src_dir}' to '{dest_dir}'...")
+    if not os.path.exists(src_dir):
+        log_msg(f"ERROR: Source directory '{src_dir}' does not exist.")
+        return False
+
+    try:
+        os.makedirs(dest_dir, exist_ok=True)
+        import shutil
+        for item in os.listdir(src_dir):
+            s = os.path.join(src_dir, item)
+            d = os.path.join(dest_dir, item)
+            if os.path.isdir(s):
+                shutil.copytree(s, d, dirs_exist_ok=True)
+            else:
+                shutil.copy2(s, d)
+        log_msg(f"Replication file copy completed successfully.")
+        
+        # Verify checksums on replication target folder
+        log_msg("Verifying checksums on replication target...")
+        from backup_core import verify_backup_checksums
+        if verify_backup_checksums(dest_dir):
+            log_msg("Replication verification OK: all SHA-256 checksums match.")
+            return True
+        else:
+            log_msg("WARNING: Replication verification FAILED on target. Checksums do not match.")
+            return False
+    except Exception as e:
+        log_msg(f"ERROR during replication: {e}")
+        return False
+
+
 def run_job_thread(jid):
     """Worker executed in a thread (and by APScheduler)."""
     with jobs_db_lock:
@@ -647,6 +693,12 @@ def run_job_thread(jid):
                 )
                 with jobs_db_lock:
                     success_vms.append(vm)
+                
+                # Replicate successful backup if replication_dest is configured
+                rep_dest = info.get('replication_dest')
+                if rep_dest:
+                    rep_vm_dest = os.path.join(rep_dest, vm, f"backup-{run_timestamp}")
+                    replicate_backup_folder(vm_dest, rep_vm_dest, log_path=log_path)
             except Exception as e:
                 is_cancel_err = "cancelled by user" in str(e).lower()
                 if is_cancel_err:
@@ -670,6 +722,16 @@ def run_job_thread(jid):
                     'retention_value': info.get('retention_value', 5)
                 }
                 enforce_retention_policy(vm_info, log_path=log_path)
+                
+                # Enforce retention policy on replication target if configured
+                if info.get('replication_dest'):
+                    rep_vm_info = {
+                        'vm_name': vm,
+                        'dest': info['replication_dest'],
+                        'retention_type': info.get('retention_type', 'keep_all'),
+                        'retention_value': info.get('retention_value', 5)
+                    }
+                    enforce_retention_policy(rep_vm_info, log_path=log_path)
         
         with jobs_db_lock:
             if failed_vms:
@@ -723,6 +785,12 @@ def run_job_thread(jid):
                 info['status']   = 'finished'
                 info['progress'] = {'pct': 100, 'phase': 'done', 'detail': 'Backup completed successfully'}
                 save_jobs_db()
+            
+            # Replicate successful backup if replication_dest is configured
+            rep_dest = info.get('replication_dest')
+            if rep_dest:
+                rep_run_dest = os.path.join(rep_dest, info['vm_name'], f"backup-{run_timestamp}")
+                replicate_backup_folder(run_dest, rep_run_dest, log_path=log_path)
         except Exception as e:
             with jobs_db_lock:
                 if "cancelled by user" in str(e).lower():
@@ -734,6 +802,16 @@ def run_job_thread(jid):
         finally:
             # Always enforce retention policy (which cleans up failed folders immediately)
             enforce_retention_policy(info, log_path=log_path)
+            
+            # Enforce retention policy on replication target if configured
+            if info.get('replication_dest'):
+                rep_info = {
+                    'vm_name': info['vm_name'],
+                    'dest': info['replication_dest'],
+                    'retention_type': info.get('retention_type', 'keep_all'),
+                    'retention_value': info.get('retention_value', 5)
+                }
+                enforce_retention_policy(rep_info, log_path=log_path)
 
 
 def create_and_start_job(
@@ -742,7 +820,8 @@ def create_and_start_job(
     schedule_type, schedule_time, weekly_day, interval_hours,
     label='', disk_filter=None, monthly_day=1, yearly_month=1,
     retention_type='keep_all', retention_value=5,
-    vm_names=None, disk_filter_map=None, use_cbt=False
+    vm_names=None, disk_filter_map=None, use_cbt=False,
+    replication_dest=None
 ):
     """Create a job entry and either run immediately or register schedule.
     disk_filter: list of VMDK path strings to include, or None for all.
@@ -763,6 +842,7 @@ def create_and_start_job(
         'vm_names':      vm_names,
         'disk_filter_map': disk_filter_map,
         'dest':          dest,
+        'replication_dest': replication_dest,
         'compress':      compress,
         'no_verify_ssl': no_verify_ssl,
         'sftp_host':     sftp_host,
@@ -897,17 +977,18 @@ def api_vm_disks(vm_name):
 @login_required
 def create_job():
     if request.method == 'POST':
-        vm_name       = request.form.get('vm_name', '').strip()
-        dest          = request.form.get('dest', './backups').strip()
-        compress      = 'compress' in request.form
-        no_verify_ssl = 'no_verify_ssl' in request.form
-        sftp_host     = request.form.get('sftp_host', '').strip() or None
-        sftp_user     = request.form.get('sftp_user', '').strip() or None
-        sftp_password = request.form.get('sftp_password', '') or None
-        schedule_type = request.form.get('schedule_type', 'now')
-        daily_time    = request.form.get('daily_time', '02:00')
-        weekly_day    = request.form.get('weekly_day', '0')
-        weekly_time   = request.form.get('weekly_time', '02:00')
+        vm_name          = request.form.get('vm_name', '').strip()
+        dest             = request.form.get('dest', './backups').strip()
+        replication_dest = request.form.get('replication_dest', '').strip() or None
+        compress         = 'compress' in request.form
+        no_verify_ssl    = 'no_verify_ssl' in request.form
+        sftp_host        = request.form.get('sftp_host', '').strip() or None
+        sftp_user        = request.form.get('sftp_user', '').strip() or None
+        sftp_password    = request.form.get('sftp_password', '') or None
+        schedule_type    = request.form.get('schedule_type', 'now')
+        daily_time       = request.form.get('daily_time', '02:00')
+        weekly_day       = request.form.get('weekly_day', '0')
+        weekly_time      = request.form.get('weekly_time', '02:00')
         
         monthly_basis = request.form.get('monthly_basis', 'day_num')
         if monthly_basis == 'weekday':
@@ -972,6 +1053,7 @@ def create_job():
             retention_type=retention_type,
             retention_value=retention_value,
             use_cbt=use_cbt,
+            replication_dest=replication_dest
         )
         n_disks = len(disk_filter) if disk_filter is not None else 'all'
         flash(f'Job created — {n_disks} disk(s) selected.', 'success')
@@ -1012,15 +1094,16 @@ def batch_jobs():
     vms_by_name = {v['name']: v for v in vm_list}
 
     if request.method == 'POST':
-        vm_names      = request.form.getlist('vms')
-        dest          = request.form.get('dest', './backups').strip()
-        compress      = 'compress' in request.form
-        no_verify_ssl = 'no_verify_ssl' in request.form
-        disk_strategy = request.form.get('disk_strategy', 'all')
-        schedule_type = request.form.get('schedule_type', 'now')
-        daily_time    = request.form.get('daily_time', '02:00')
-        weekly_day    = request.form.get('weekly_day', '0')
-        weekly_time   = request.form.get('weekly_time', '02:00')
+        vm_names         = request.form.getlist('vms')
+        dest             = request.form.get('dest', './backups').strip()
+        replication_dest = request.form.get('replication_dest', '').strip() or None
+        compress         = 'compress' in request.form
+        no_verify_ssl    = 'no_verify_ssl' in request.form
+        disk_strategy    = request.form.get('disk_strategy', 'all')
+        schedule_type    = request.form.get('schedule_type', 'now')
+        daily_time       = request.form.get('daily_time', '02:00')
+        weekly_day       = request.form.get('weekly_day', '0')
+        weekly_time      = request.form.get('weekly_time', '02:00')
         
         monthly_basis = request.form.get('monthly_basis', 'day_num')
         if monthly_basis == 'weekday':
@@ -1092,6 +1175,7 @@ def batch_jobs():
             vm_names=vm_names,
             disk_filter_map=disk_filter_map,
             use_cbt=use_cbt,
+            replication_dest=replication_dest
         )
 
         strat_label = {'all': 'all disks', 'os': 'OS disk only', 'vmx': 'VMX config only'}.get(disk_strategy, disk_strategy)
@@ -1302,13 +1386,14 @@ def edit_job(jobid):
             return redirect(url_for('job_detail', jobid=jobid))
 
         if request.method == 'POST':
-            dest          = request.form.get('dest', './backups').strip()
-            compress      = 'compress' in request.form
-            no_verify_ssl = 'no_verify_ssl' in request.form
-            schedule_type = request.form.get('schedule_type', 'now')
-            daily_time    = request.form.get('daily_time', '02:00')
-            weekly_day    = request.form.get('weekly_day', '0')
-            weekly_time   = request.form.get('weekly_time', '02:00')
+            dest             = request.form.get('dest', './backups').strip()
+            replication_dest = request.form.get('replication_dest', '').strip() or None
+            compress         = 'compress' in request.form
+            no_verify_ssl    = 'no_verify_ssl' in request.form
+            schedule_type    = request.form.get('schedule_type', 'now')
+            daily_time       = request.form.get('daily_time', '02:00')
+            weekly_day       = request.form.get('weekly_day', '0')
+            weekly_time      = request.form.get('weekly_time', '02:00')
 
             monthly_basis = request.form.get('monthly_basis', 'day_num')
             if monthly_basis == 'weekday':
@@ -1352,6 +1437,7 @@ def edit_job(jobid):
             # Update job config
             info['label'] = label
             info['dest'] = dest
+            info['replication_dest'] = replication_dest
             info['compress'] = compress
             info['no_verify_ssl'] = no_verify_ssl
             info['use_cbt'] = use_cbt
