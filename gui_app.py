@@ -62,6 +62,26 @@ def init_db():
                 data TEXT
             )
         ''')
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS job_runs (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                job_id TEXT,
+                job_label TEXT,
+                vm_name TEXT,
+                started REAL,
+                ended REAL,
+                duration REAL,
+                status TEXT,
+                size_bytes INTEGER,
+                notification_sent INTEGER DEFAULT 0
+            )
+        ''')
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS settings (
+                key TEXT PRIMARY KEY,
+                value TEXT
+            )
+        ''')
         conn.commit()
     finally:
         conn.close()
@@ -459,6 +479,405 @@ def fmt_time(ts):
     return datetime.fromtimestamp(ts).strftime('%Y-%m-%d %H:%M:%S') if ts else '—'
 
 
+def get_dir_size(path):
+    total = 0
+    if not path:
+        return total
+    try:
+        if os.path.exists(path):
+            if os.path.isfile(path):
+                return os.path.getsize(path)
+            for dirpath, dirnames, filenames in os.walk(path):
+                for f in filenames:
+                    fp = os.path.join(dirpath, f)
+                    if not os.path.islink(fp):
+                        total += os.path.getsize(fp)
+    except Exception:
+        pass
+    return total
+
+
+def fmt_duration(seconds):
+    seconds = int(seconds)
+    h = seconds // 3600
+    m = (seconds % 3600) // 60
+    s = seconds % 60
+    if h > 0:
+        return f"{h}h {m}m {s}s"
+    elif m > 0:
+        return f"{m}m {s}s"
+    else:
+        return f"{s}s"
+
+
+def get_setting(key, default=None):
+    conn = sqlite3.connect(DB_PATH)
+    try:
+        cursor = conn.cursor()
+        cursor.execute("SELECT value FROM settings WHERE key = ?", (key,))
+        row = cursor.fetchone()
+        if row is not None:
+            return row[0]
+    except Exception:
+        pass
+    finally:
+        conn.close()
+    return default
+
+
+def set_setting(key, value):
+    conn = sqlite3.connect(DB_PATH)
+    try:
+        cursor = conn.cursor()
+        cursor.execute("INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)", (key, str(value)))
+        conn.commit()
+    except Exception as e:
+        print(f"Error setting {key}: {e}", file=sys.stderr)
+    finally:
+        conn.close()
+
+
+def send_webhook_notification(url, payload_type, run_data, raise_on_error=False):
+    if not url:
+        return
+    import requests
+    
+    size_gb = run_data['size_bytes'] / (1024 * 1024 * 1024)
+    duration_str = fmt_duration(run_data['duration'])
+    started_str = datetime.fromtimestamp(run_data['started']).strftime('%Y-%m-%d %H:%M:%S')
+    
+    status_text = run_data['status'].upper()
+    color = "#10b981"
+    if "failed" in run_data['status'].lower():
+        color = "#ef4444"
+    elif "error" in run_data['status'].lower():
+        color = "#f59e0b"
+        
+    title = f"Backup Job {status_text}: {run_data['job_label'] or run_data['job_id'][:8]}"
+    
+    if payload_type == 'slack_discord':
+        if "discord.com" in url:
+            discord_color = 1096065
+            if "failed" in run_data['status'].lower():
+                discord_color = 15680580
+            elif "error" in run_data['status'].lower():
+                discord_color = 16096779
+                
+            payload = {
+                "embeds": [{
+                    "title": title,
+                    "color": discord_color,
+                    "fields": [
+                        {"name": "VM(s)", "value": run_data['vm_name'], "inline": True},
+                        {"name": "Duration", "value": duration_str, "inline": True},
+                        {"name": "Backup Size", "value": f"{size_gb:.2f} GB", "inline": True},
+                        {"name": "Status", "value": run_data['status'], "inline": True},
+                        {"name": "Start Time", "value": started_str, "inline": True}
+                    ],
+                    "footer": {
+                        "text": f"Job ID: {run_data['job_id']}"
+                    }
+                }]
+            }
+        else:
+            payload = {
+                "text": f"*{title}*",
+                "attachments": [{
+                    "color": color,
+                    "fields": [
+                        {"title": "VM(s)", "value": run_data['vm_name'], "short": True},
+                        {"title": "Duration", "value": duration_str, "short": True},
+                        {"title": "Backup Size", "value": f"{size_gb:.2f} GB", "short": True},
+                        {"title": "Status", "value": run_data['status'], "short": True},
+                        {"title": "Start Time", "value": started_str, "short": True},
+                        {"title": "Job ID", "value": run_data['job_id'], "short": True}
+                    ]
+                }]
+            }
+    else:
+        payload = run_data
+        
+    try:
+        r = requests.post(url, json=payload, timeout=10)
+        r.raise_for_status()
+    except Exception as e:
+        print(f"Error sending webhook notification: {e}", file=sys.stderr)
+        if raise_on_error:
+            raise
+
+
+def send_email_notification(smtp, run_data, raise_on_error=False):
+    host = smtp.get('host')
+    port = int(smtp.get('port') or 587)
+    user = smtp.get('user')
+    password = smtp.get('password')
+    sender = smtp.get('sender')
+    recipient = smtp.get('recipient')
+    
+    if not (host and sender and recipient):
+        return
+        
+    import smtplib
+    from email.mime.text import MIMEText
+    from email.mime.multipart import MIMEMultipart
+    
+    size_gb = run_data['size_bytes'] / (1024 * 1024 * 1024)
+    duration_str = fmt_duration(run_data['duration'])
+    started_str = datetime.fromtimestamp(run_data['started']).strftime('%Y-%m-%d %H:%M:%S')
+    ended_str = datetime.fromtimestamp(run_data['ended']).strftime('%Y-%m-%d %H:%M:%S')
+    
+    status_text = run_data['status'].upper()
+    
+    theme_color = "#10b981"
+    bg_banner = "linear-gradient(135deg, #10b981 0%, #059669 100%)"
+    if "failed" in run_data['status'].lower():
+        theme_color = "#ef4444"
+        bg_banner = "linear-gradient(135deg, #ef4444 0%, #dc2626 100%)"
+    elif "error" in run_data['status'].lower():
+        theme_color = "#f59e0b"
+        bg_banner = "linear-gradient(135deg, #f59e0b 0%, #d97706 100%)"
+        
+    subject = f"Backup Job {status_text}: {run_data['job_label'] or run_data['job_id'][:8]}"
+    
+    html = f"""
+    <!DOCTYPE html>
+    <html>
+    <head>
+      <meta charset="utf-8">
+      <style>
+        body {{
+          font-family: 'Inter', system-ui, -apple-system, sans-serif;
+          background-color: #080a10;
+          color: #f8fafc;
+          margin: 0; padding: 20px;
+        }}
+        .card {{
+          background-color: #0e111a;
+          border: 1px solid rgba(255, 255, 255, 0.05);
+          border-radius: 12px;
+          overflow: hidden;
+          max-width: 600px;
+          margin: 20px auto;
+          box-shadow: 0 10px 30px rgba(0, 0, 0, 0.5);
+        }}
+        .banner {{
+          background: {bg_banner};
+          color: #ffffff;
+          padding: 24px;
+          text-align: center;
+        }}
+        .banner h2 {{
+          margin: 0; font-size: 20px; font-weight: 700;
+        }}
+        .content {{
+          padding: 28px;
+        }}
+        .grid {{
+          display: table;
+          width: 100%;
+          margin-bottom: 20px;
+        }}
+        .row {{
+          display: table-row;
+        }}
+        .cell-lbl {{
+          display: table-cell;
+          padding: 8px 10px;
+          font-weight: 600;
+          color: #94a3b8;
+          width: 30%;
+          font-size: 13px;
+        }}
+        .cell-val {{
+          display: table-cell;
+          padding: 8px 10px;
+          color: #f8fafc;
+          font-size: 13.5px;
+        }}
+        .footer {{
+          padding: 16px 28px;
+          background-color: rgba(8, 10, 16, 0.4);
+          border-top: 1px solid rgba(255, 255, 255, 0.05);
+          font-size: 11px;
+          color: #64748b;
+          text-align: center;
+        }}
+      </style>
+    </head>
+    <body>
+      <div class="card">
+        <div class="banner">
+          <h2>Backup Job: {status_text}</h2>
+        </div>
+        <div class="content">
+          <div class="grid">
+            <div class="row">
+              <div class="cell-lbl">Job Label</div>
+              <div class="cell-val">{run_data['job_label'] or '—'}</div>
+            </div>
+            <div class="row">
+              <div class="cell-lbl">VM Name(s)</div>
+              <div class="cell-val"><strong>{run_data['vm_name']}</strong></div>
+            </div>
+            <div class="row">
+              <div class="cell-lbl">Size</div>
+              <div class="cell-val">{size_gb:.2f} GB</div>
+            </div>
+            <div class="row">
+              <div class="cell-lbl">Duration</div>
+              <div class="cell-val">{duration_str}</div>
+            </div>
+            <div class="row">
+              <div class="cell-lbl">Start Time</div>
+              <div class="cell-val">{started_str}</div>
+            </div>
+            <div class="row">
+              <div class="cell-lbl">End Time</div>
+              <div class="cell-val">{ended_str}</div>
+            </div>
+            <div class="row">
+              <div class="cell-lbl">Status</div>
+              <div class="cell-val" style="color: {theme_color}; font-weight: 700;">{run_data['status']}</div>
+            </div>
+          </div>
+        </div>
+        <div class="footer">
+          vSphere Backup Manager &middot; Job ID: {run_data['job_id']}
+        </div>
+      </div>
+    </body>
+    </html>
+    """
+    
+    msg = MIMEMultipart()
+    msg['From'] = sender
+    msg['To'] = recipient
+    msg['Subject'] = subject
+    msg.attach(MIMEText(html, 'html'))
+    
+    try:
+        if port == 465:
+            server = smtplib.SMTP_SSL(host, port, timeout=10)
+        else:
+            server = smtplib.SMTP(host, port, timeout=10)
+            server.starttls()
+            
+        if user and password:
+            server.login(user, password)
+            
+        server.sendmail(sender, recipient, msg.as_string())
+        server.quit()
+    except Exception as e:
+        print(f"Error sending email notification: {e}", file=sys.stderr)
+        if raise_on_error:
+            raise
+
+
+def log_and_notify_run(jid, info, start_time, end_time, status, run_dest):
+    size_bytes = get_dir_size(run_dest) if run_dest else 0
+    duration = end_time - start_time
+    
+    vm_names = info.get('vm_names')
+    if vm_names:
+        vm_display = ", ".join(vm_names)
+    else:
+        vm_display = info.get('vm_name', '—')
+        
+    conn = sqlite3.connect(DB_PATH)
+    run_id = None
+    try:
+        cursor = conn.cursor()
+        cursor.execute('''
+            INSERT INTO job_runs (job_id, job_label, vm_name, started, ended, duration, status, size_bytes)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        ''', (jid, info.get('label', ''), vm_display, start_time, end_time, duration, status, size_bytes))
+        conn.commit()
+        run_id = cursor.lastrowid
+    except Exception as e:
+        print(f"Error writing to job_runs database: {e}", file=sys.stderr)
+    finally:
+        conn.close()
+        
+    # Log Retention Policy Cleanups
+    retention_days = get_setting('log_retention_days', 'never')
+    if retention_days != 'never' and str(retention_days).isdigit():
+        days = int(retention_days)
+        if days > 0:
+            cutoff_time = time.time() - (days * 86400)
+            conn = sqlite3.connect(DB_PATH)
+            try:
+                cursor = conn.cursor()
+                cursor.execute("DELETE FROM job_runs WHERE started < ?", (cutoff_time,))
+                conn.commit()
+            except Exception as e:
+                print(f"Error cleaning up old job runs: {e}", file=sys.stderr)
+            finally:
+                conn.close()
+        
+    alert_level = get_setting('alert_level', 'all')
+    is_failed = 'failed' in status.lower() or 'error' in status.lower()
+    
+    should_alert = False
+    if alert_level == 'all':
+        should_alert = True
+    elif alert_level == 'failed' and is_failed:
+        should_alert = True
+        
+    if not should_alert:
+        return
+        
+    run_data = {
+        'job_id': jid,
+        'job_label': info.get('label', ''),
+        'vm_name': vm_display,
+        'started': start_time,
+        'ended': end_time,
+        'duration': duration,
+        'status': status,
+        'size_bytes': size_bytes
+    }
+    
+    notification_sent = 0
+    
+    webhook_enabled = get_setting('webhook_enabled') == 'true'
+    webhook_url = get_setting('webhook_url')
+    webhook_type = get_setting('webhook_type', 'slack_discord')
+    if webhook_enabled and webhook_url:
+        try:
+            send_webhook_notification(webhook_url, webhook_type, run_data)
+            notification_sent = 1
+        except Exception:
+            pass
+            
+    smtp_enabled = get_setting('smtp_enabled') == 'true'
+    if smtp_enabled:
+        smtp_settings = {
+            'host': get_setting('smtp_host'),
+            'port': get_setting('smtp_port'),
+            'user': get_setting('smtp_user'),
+            'password': get_setting('smtp_password'),
+            'sender': get_setting('smtp_sender'),
+            'recipient': get_setting('smtp_recipient')
+        }
+        try:
+            t = threading.Thread(target=send_email_notification, args=(smtp_settings, run_data), daemon=True)
+            t.start()
+            notification_sent = 1
+        except Exception:
+            pass
+            
+    if notification_sent and run_id:
+        conn = sqlite3.connect(DB_PATH)
+        try:
+            cursor = conn.cursor()
+            cursor.execute("UPDATE job_runs SET notification_sent = 1 WHERE id = ?", (run_id,))
+            conn.commit()
+        except Exception:
+            pass
+        finally:
+            conn.close()
+
+
 def job_to_display(jid, info):
     """Convert internal job dict to template-friendly dict."""
     disk_filter = info.get('disk_filter')
@@ -781,6 +1200,10 @@ def run_job_thread(jid):
                 'detail': f"Batch completed. Success: {len(success_vms)}, Failed: {len(failed_vms)}"
             }
             save_jobs_db()
+            final_status = info['status']
+            run_dest = info.get('run_dest')
+            
+        log_and_notify_run(jid, info, info['started'], time.time(), final_status, run_dest)
         
     else:
         # Single VM backup run (original behavior)
@@ -845,6 +1268,11 @@ def run_job_thread(jid):
                     'retention_value': info.get('retention_value', 5)
                 }
                 enforce_retention_policy(rep_info, log_path=log_path)
+            
+            with jobs_db_lock:
+                final_status = info.get('status', 'failed')
+            
+            log_and_notify_run(jid, info, info['started'], time.time(), final_status, run_dest)
 
 
 def create_and_start_job(
@@ -959,6 +1387,103 @@ def logout():
     session.clear()
     flash('Logged out.', 'info')
     return redirect(url_for('login'))
+
+
+@app.route('/settings', methods=['GET', 'POST'])
+@login_required
+def settings_page():
+    if request.method == 'POST':
+        set_setting('smtp_enabled', 'true' if 'smtp_enabled' in request.form else 'false')
+        set_setting('smtp_host', request.form.get('smtp_host', '').strip())
+        set_setting('smtp_port', request.form.get('smtp_port', '587').strip())
+        set_setting('smtp_user', request.form.get('smtp_user', '').strip())
+        set_setting('smtp_password', request.form.get('smtp_password', '').strip())
+        set_setting('smtp_sender', request.form.get('smtp_sender', '').strip())
+        set_setting('smtp_recipient', request.form.get('smtp_recipient', '').strip())
+        
+        set_setting('webhook_enabled', 'true' if 'webhook_enabled' in request.form else 'false')
+        set_setting('webhook_url', request.form.get('webhook_url', '').strip())
+        set_setting('webhook_type', request.form.get('webhook_type', 'slack_discord'))
+        
+        set_setting('alert_level', request.form.get('alert_level', 'all'))
+        set_setting('log_retention_days', request.form.get('log_retention_days', 'never'))
+        
+        flash('Settings saved successfully.', 'success')
+        return redirect(url_for('settings_page'))
+        
+    opts = {
+        'smtp_enabled': get_setting('smtp_enabled', 'false') == 'true',
+        'smtp_host': get_setting('smtp_host', ''),
+        'smtp_port': get_setting('smtp_port', '587'),
+        'smtp_user': get_setting('smtp_user', ''),
+        'smtp_password': get_setting('smtp_password', ''),
+        'smtp_sender': get_setting('smtp_sender', ''),
+        'smtp_recipient': get_setting('smtp_recipient', ''),
+        
+        'webhook_enabled': get_setting('webhook_enabled', 'false') == 'true',
+        'webhook_url': get_setting('webhook_url', ''),
+        'webhook_type': get_setting('webhook_type', 'slack_discord'),
+        
+        'alert_level': get_setting('alert_level', 'all'),
+        'log_retention_days': get_setting('log_retention_days', 'never')
+    }
+    return render_template('settings.html', settings=opts)
+
+
+@app.route('/settings/test-notification', methods=['POST'])
+@login_required
+def settings_test_notification():
+    webhook_enabled = 'webhook_enabled' in request.form
+    webhook_url = request.form.get('webhook_url', '').strip()
+    webhook_type = request.form.get('webhook_type', 'slack_discord')
+    
+    smtp_enabled = 'smtp_enabled' in request.form
+    smtp_settings = {
+        'host': request.form.get('smtp_host', '').strip(),
+        'port': request.form.get('smtp_port', '587').strip(),
+        'user': request.form.get('smtp_user', '').strip(),
+        'password': request.form.get('smtp_password', '').strip(),
+        'sender': request.form.get('smtp_sender', '').strip(),
+        'recipient': request.form.get('smtp_recipient', '').strip()
+    }
+    
+    test_run_data = {
+        'job_id': 'test-run-id-12345',
+        'job_label': 'Diagnostic Test Alert',
+        'vm_name': 'mock-vm-1, mock-vm-2',
+        'started': time.time() - 45,
+        'ended': time.time(),
+        'duration': 45.0,
+        'status': 'finished (Diagnostic Test Success)',
+        'size_bytes': 1532984025
+    }
+    
+    webhook_error = None
+    email_error = None
+    
+    if webhook_enabled and webhook_url:
+        try:
+            send_webhook_notification(webhook_url, webhook_type, test_run_data, raise_on_error=True)
+        except Exception as e:
+            webhook_error = str(e)
+            
+    if smtp_enabled:
+        try:
+            send_email_notification(smtp_settings, test_run_data, raise_on_error=True)
+        except Exception as e:
+            email_error = str(e)
+            
+    if webhook_error or email_error:
+        err_msg = ""
+        if webhook_error:
+            err_msg += f"Webhook Failed: {webhook_error}. "
+        if email_error:
+            err_msg += f"Email Failed: {email_error}."
+        flash(err_msg, 'danger')
+    else:
+        flash('Diagnostic test notifications sent successfully. Please check your Inbox and Webhook channel!', 'success')
+        
+    return redirect(url_for('settings_page'))
 
 
 # ── VM Browser ────────────────────────────────────────────────────────────────
@@ -1250,6 +1775,90 @@ def batch_jobs():
         vms_by_name=vms_by_name,
         current_month=datetime.now().month,
     )
+
+
+@app.route('/reports')
+@login_required
+def reports_dashboard():
+    conn = sqlite3.connect(DB_PATH)
+    runs = []
+    try:
+        cursor = conn.cursor()
+        cursor.execute('''
+            SELECT id, job_id, job_label, vm_name, started, ended, duration, status, size_bytes, notification_sent 
+            FROM job_runs 
+            ORDER BY started DESC
+        ''')
+        rows = cursor.fetchall()
+        for r in rows:
+            runs.append({
+                'id': r[0],
+                'job_id': r[1],
+                'job_label': r[2],
+                'vm_name': r[3],
+                'started': r[4],
+                'started_fmt': datetime.fromtimestamp(r[4]).strftime('%Y-%m-%d %H:%M:%S') if r[4] else '—',
+                'ended': r[5],
+                'duration': r[6],
+                'duration_fmt': fmt_duration(r[6]) if r[6] else '—',
+                'status': r[7],
+                'size_bytes': r[8],
+                'size_gb': round(r[8] / (1024 * 1024 * 1024), 2) if r[8] else 0.0,
+                'notification_sent': bool(r[9])
+            })
+    except Exception as e:
+        print(f"Error fetching job_runs: {e}", file=sys.stderr)
+    finally:
+        conn.close()
+        
+    total_runs = len(runs)
+    success_runs = sum(1 for r in runs if r['status'].lower() in ('finished', 'success'))
+    failed_runs = total_runs - success_runs
+    success_rate = round((success_runs / total_runs) * 100, 1) if total_runs > 0 else 100.0
+    total_size_bytes = sum(r['size_bytes'] for r in runs)
+    total_size_gb = round(total_size_bytes / (1024 * 1024 * 1024), 2)
+    
+    avg_duration = round(sum(r['duration'] for r in runs) / total_runs, 1) if total_runs > 0 else 0.0
+    avg_duration_fmt = fmt_duration(avg_duration)
+    
+    stats = {
+        'total': total_runs,
+        'success': success_runs,
+        'failed': failed_runs,
+        'success_rate': success_rate,
+        'total_size_gb': total_size_gb,
+        'avg_duration_fmt': avg_duration_fmt
+    }
+    
+    return render_template('reports.html', runs=runs, stats=stats)
+
+
+@app.route('/api/reports-data')
+@login_required
+def reports_data_api():
+    conn = sqlite3.connect(DB_PATH)
+    chart_data = []
+    try:
+        cursor = conn.cursor()
+        cursor.execute('''
+            SELECT started, size_bytes, duration, status 
+            FROM job_runs 
+            ORDER BY started DESC 
+            LIMIT 15
+        ''')
+        rows = cursor.fetchall()
+        for r in reversed(rows):
+            chart_data.append({
+                'date': datetime.fromtimestamp(r[0]).strftime('%m-%d %H:%M'),
+                'size_gb': round(r[1] / (1024 * 1024 * 1024), 2) if r[1] else 0.0,
+                'duration_sec': round(r[2], 1) if r[2] else 0.0,
+                'status': r[3]
+            })
+    except Exception as e:
+        print(f"Error fetching reports API: {e}", file=sys.stderr)
+    finally:
+        conn.close()
+    return jsonify({'runs': chart_data})
 
 
 # ── Jobs Dashboard ────────────────────────────────────────────────────────────

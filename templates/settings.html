@@ -1,0 +1,287 @@
+{% extends "base.html" %}
+{% set active_page = 'settings' %}
+{% block title %}System Settings — vSphere Backup Manager{% endblock %}
+
+{% block head %}
+<style>
+  .settings-wrap { max-width: 800px; margin: 0 auto; }
+  
+  .section-card {
+    background: var(--bg-card);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    margin-bottom: 24px;
+    overflow: hidden;
+    box-shadow: var(--shadow);
+    backdrop-filter: blur(8px);
+    transition: border-color 0.25s ease;
+  }
+  .section-card.enabled {
+    border-color: rgba(99, 102, 241, 0.4);
+  }
+  .section-card-header {
+    padding: 18px 24px;
+    border-bottom: 1px solid var(--border);
+    background: rgba(255,255,255,0.01);
+    display: flex; align-items: center; gap: 12px;
+    font-size: 15px; font-weight: 700;
+    letter-spacing: -0.01em;
+  }
+  .section-card-body { padding: 24px; }
+
+  .form-row {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 16px;
+    margin-bottom: 16px;
+  }
+  @media (max-width: 600px) {
+    .form-row { grid-template-columns: 1fr; }
+  }
+
+  .form-group {
+    margin-bottom: 16px;
+  }
+  .form-group:last-child {
+    margin-bottom: 0;
+  }
+
+  .form-check {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+  }
+  .form-check input[type="checkbox"] {
+    width: 18px;
+    height: 18px;
+    accent-color: var(--accent);
+    cursor: pointer;
+  }
+  .form-check label {
+    cursor: pointer;
+    user-select: none;
+  }
+
+  .settings-toggle-area {
+    transition: opacity 0.25s ease, max-height 0.25s ease;
+    overflow: hidden;
+  }
+  .settings-toggle-area.collapsed {
+    max-height: 0;
+    opacity: 0;
+    pointer-events: none;
+    margin-top: 0;
+  }
+  .settings-toggle-area.expanded {
+    max-height: 1000px;
+    opacity: 1;
+    margin-top: 20px;
+  }
+
+  .action-bar {
+    display: flex;
+    gap: 14px;
+    align-items: center;
+    padding: 16px 0 32px;
+    border-top: 1px solid var(--border);
+    margin-top: 8px;
+  }
+
+  .banner-tip {
+    padding: 14px 18px;
+    background: rgba(6,182,212,0.06);
+    border: 1px solid rgba(6,182,212,0.18);
+    border-radius: var(--radius-sm);
+    font-size: 13px;
+    color: var(--text-secondary);
+    margin-bottom: 20px;
+    display: flex;
+    align-items: flex-start;
+    gap: 10px;
+  }
+  .banner-tip svg {
+    color: var(--accent-2);
+    flex-shrink: 0;
+    margin-top: 2px;
+  }
+</style>
+{% endblock %}
+
+{% block content %}
+<div class="topbar">
+  <div>
+    <div class="topbar-title">Global Settings</div>
+    <div class="topbar-subtitle">Configure SMTP connection details, Webhook channels, and Log retention policies</div>
+  </div>
+</div>
+
+<div class="content">
+  <div class="settings-wrap">
+    
+    <div class="banner-tip">
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><line x1="12" y1="16" x2="12" y2="12"/><line x1="12" y1="8" x2="12.01" y2="8"/></svg>
+      <div>
+        <strong>Diagnostic Connection Testing:</strong> You can click the **"Send Test Notification"** button at the bottom of the page to verify your credentials synchronously. It tests whatever inputs are typed in the form, without requiring you to save them first.
+      </div>
+    </div>
+
+    <form method="post" action="{{ url_for('settings_page') }}" id="settingsForm">
+
+      <!-- SMTP Section -->
+      <div class="section-card {% if settings.smtp_enabled %}enabled{% endif %}" id="smtpCard">
+        <div class="section-card-header">
+          <span style="font-size:18px;">📧</span> SMTP Email Configuration
+        </div>
+        <div class="section-card-body">
+          <div class="form-check">
+            <input type="checkbox" id="smtp_enabled" name="smtp_enabled" {% if settings.smtp_enabled %}checked{% endif %} onchange="toggleSmtp(this.checked)" />
+            <label for="smtp_enabled" style="font-weight:600; font-size:14.5px;">Enable SMTP Email Notifications</label>
+          </div>
+          
+          <div class="settings-toggle-area {% if settings.smtp_enabled %}expanded{% else %}collapsed{% endif %}" id="smtpFields">
+            <div class="form-row">
+              <div class="form-group">
+                <label class="form-label" for="smtp_host">SMTP Server Host</label>
+                <input type="text" id="smtp_host" name="smtp_host" class="form-control" placeholder="e.g. smtp.gmail.com" value="{{ settings.smtp_host }}" />
+              </div>
+              <div class="form-group">
+                <label class="form-label" for="smtp_port">SMTP Port</label>
+                <input type="text" id="smtp_port" name="smtp_port" class="form-control" placeholder="e.g. 587 or 465" value="{{ settings.smtp_port }}" />
+              </div>
+            </div>
+            
+            <div class="form-row">
+              <div class="form-group">
+                <label class="form-label" for="smtp_user">SMTP Username (Optional)</label>
+                <input type="text" id="smtp_user" name="smtp_user" class="form-control" placeholder="e.g. admin@company.com" value="{{ settings.smtp_user }}" autocomplete="off" />
+              </div>
+              <div class="form-group">
+                <label class="form-label" for="smtp_password">SMTP Password (Optional)</label>
+                <input type="password" id="smtp_password" name="smtp_password" class="form-control" placeholder="••••••••" value="{{ settings.smtp_password }}" autocomplete="new-password" />
+              </div>
+            </div>
+
+            <div class="form-row">
+              <div class="form-group">
+                <label class="form-label" for="smtp_sender">Sender Email Address</label>
+                <input type="email" id="smtp_sender" name="smtp_sender" class="form-control" placeholder="e.g. backups@company.com" value="{{ settings.smtp_sender }}" />
+              </div>
+              <div class="form-group">
+                <label class="form-label" for="smtp_recipient">Recipient Email Address</label>
+                <input type="email" id="smtp_recipient" name="smtp_recipient" class="form-control" placeholder="e.g. admin@company.com" value="{{ settings.smtp_recipient }}" />
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Webhook Section -->
+      <div class="section-card {% if settings.webhook_enabled %}enabled{% endif %}" id="webhookCard">
+        <div class="section-card-header">
+          <span style="font-size:18px;">🔗</span> Webhook Alert Configuration
+        </div>
+        <div class="section-card-body">
+          <div class="form-check">
+            <input type="checkbox" id="webhook_enabled" name="webhook_enabled" {% if settings.webhook_enabled %}checked{% endif %} onchange="toggleWebhook(this.checked)" />
+            <label for="webhook_enabled" style="font-weight:600; font-size:14.5px;">Enable Webhook Notifications</label>
+          </div>
+          
+          <div class="settings-toggle-area {% if settings.webhook_enabled %}expanded{% else %}collapsed{% endif %}" id="webhookFields">
+            <div class="form-group">
+              <label class="form-label" for="webhook_url">Webhook Destination URL</label>
+              <input type="url" id="webhook_url" name="webhook_url" class="form-control" placeholder="e.g. https://discord.com/api/webhooks/... or https://hooks.slack.com/services/..." value="{{ settings.webhook_url }}" />
+            </div>
+            
+            <div class="form-group">
+              <label class="form-label" for="webhook_type">Webhook Payload Format</label>
+              <select id="webhook_type" name="webhook_type" class="form-control">
+                <option value="slack_discord" {% if settings.webhook_type == 'slack_discord' %}selected{% endif %}>Slack & Discord Format (Rich Embeds / Color Bars)</option>
+                <option value="raw_json" {% if settings.webhook_type == 'raw_json' %}selected{% endif %}>Raw JSON Payload (Full backup runs telemetry data)</option>
+              </select>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Notification Rules & Log Retention -->
+      <div class="section-card">
+        <div class="section-card-header">
+          <span style="font-size:18px;">⚙️</span> Global Notification & Retention Rules
+        </div>
+        <div class="section-card-body">
+          <div class="form-row">
+            <div class="form-group">
+              <label class="form-label" for="alert_level">Alert Trigger Threshold</label>
+              <select id="alert_level" name="alert_level" class="form-control">
+                <option value="all" {% if settings.alert_level == 'all' %}selected{% endif %}>Notify on All Completed Runs (Success and Failures)</option>
+                <option value="failed" {% if settings.alert_level == 'failed' %}selected{% endif %}>Notify on Failures / Errors Only</option>
+              </select>
+            </div>
+            
+            <div class="form-group">
+              <label class="form-label" for="log_retention_days">Run History Retention Policy</label>
+              <select id="log_retention_days" name="log_retention_days" class="form-control">
+                <option value="never" {% if settings.log_retention_days == 'never' %}selected{% endif %}>Never delete (Keep full logs history)</option>
+                <option value="30" {% if settings.log_retention_days == '30' %}selected{% endif %}>Keep logs for 30 Days</option>
+                <option value="90" {% if settings.log_retention_days == '90' %}selected{% endif %}>Keep logs for 90 Days</option>
+                <option value="180" {% if settings.log_retention_days == '180' %}selected{% endif %}>Keep logs for 180 Days</option>
+                <option value="365" {% if settings.log_retention_days == '365' %}selected{% endif %}>Keep logs for 1 Year (365 Days)</option>
+              </select>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Action buttons -->
+      <div class="action-bar">
+        <button type="submit" class="btn btn-primary">
+          💾 Save Settings
+        </button>
+        <button type="submit" formaction="{{ url_for('settings_test_notification') }}" class="btn btn-secondary" id="testAlertBtn">
+          🔔 Send Test Notification
+        </button>
+      </div>
+
+    </form>
+  </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+  function toggleSmtp(checked) {
+    const fields = document.getElementById('smtpFields');
+    const card = document.getElementById('smtpCard');
+    if (checked) {
+      fields.classList.remove('collapsed');
+      fields.classList.add('expanded');
+      card.classList.add('enabled');
+    } else {
+      fields.classList.remove('expanded');
+      fields.classList.add('collapsed');
+      card.classList.remove('enabled');
+    }
+  }
+
+  function toggleWebhook(checked) {
+    const fields = document.getElementById('webhookFields');
+    const card = document.getElementById('webhookCard');
+    if (checked) {
+      fields.classList.remove('collapsed');
+      fields.classList.add('expanded');
+      card.classList.add('enabled');
+    } else {
+      fields.classList.remove('expanded');
+      fields.classList.add('collapsed');
+      card.classList.remove('enabled');
+    }
+  }
+
+  document.getElementById('settingsForm').addEventListener('submit', function(e) {
+    const btn = document.activeElement;
+    if (btn && btn.id === 'testAlertBtn') {
+      btn.textContent = 'Sending Diagnostic...';
+    }
+  });
+</script>
+{% endblock %}
