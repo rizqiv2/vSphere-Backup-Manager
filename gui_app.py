@@ -204,7 +204,6 @@ def load_jobs_db(is_startup=False):
 
 def save_jobs_db():
     with jobs_db_lock:
-        load_jobs_db() # Reload other workers' jobs first to avoid overwriting them
         try:
             conn = sqlite3.connect(DB_PATH)
             try:
@@ -2273,6 +2272,7 @@ def api_job_status(jobid):
 @app.route('/job/<jobid>/cancel-schedule', methods=['POST'])
 @login_required
 def cancel_schedule(jobid):
+    load_jobs_db()
     with jobs_db_lock:
         info = jobs.get(jobid)
         if not info:
@@ -2293,6 +2293,7 @@ def cancel_schedule(jobid):
 @app.route('/job/<jobid>/reactivate-schedule', methods=['POST'])
 @login_required
 def reactivate_schedule(jobid):
+    load_jobs_db()
     with jobs_db_lock:
         info = jobs.get(jobid)
         if not info:
@@ -2318,6 +2319,7 @@ def reactivate_schedule(jobid):
 @app.route('/job/<jobid>/run', methods=['POST'])
 @login_required
 def run_job_now(jobid):
+    load_jobs_db()
     with jobs_db_lock:
         info = jobs.get(jobid)
         if not info:
@@ -2340,6 +2342,7 @@ def run_job_now(jobid):
 @app.route('/job/<jobid>/stop', methods=['POST'])
 @login_required
 def stop_job(jobid):
+    load_jobs_db()
     with jobs_db_lock:
         info = jobs.get(jobid)
         if not info:
@@ -2357,6 +2360,7 @@ def stop_job(jobid):
 @app.route('/job/<jobid>/delete', methods=['POST'])
 @login_required
 def delete_job(jobid):
+    load_jobs_db()
     with jobs_db_lock:
         info = jobs.get(jobid)
         if not info:
@@ -2390,6 +2394,7 @@ def delete_job(jobid):
 @app.route('/job/<jobid>/edit', methods=['GET', 'POST'])
 @login_required
 def edit_job(jobid):
+    load_jobs_db()
     with jobs_db_lock:
         info = jobs.get(jobid)
         if not info:
