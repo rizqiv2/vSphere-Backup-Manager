@@ -66,6 +66,30 @@ def save_job_to_db_direct(jid, info):
     except Exception as e:
         print(f"ERROR: Failed to save job {jid} directly to SQLite: {e}", file=sys.stderr)
 
+def log_audit(actor, action, target, details, req=None):
+    ip_addr = '-'
+    if req:
+        try:
+            ip_addr = req.headers.get('X-Forwarded-For', '').split(',')[0].strip() or req.remote_addr or '-'
+        except Exception:
+            pass
+    try:
+        conn = sqlite3.connect(DB_PATH)
+        try:
+            cursor = conn.cursor()
+            cursor.execute(
+                "INSERT INTO audit_logs (timestamp, actor, action, target, details, ip_address) VALUES (?, ?, ?, ?, ?, ?)",
+                (time.time(), actor, action, target, details, ip_addr)
+            )
+            # Auto-prune audit logs older than 360 days
+            cutoff = time.time() - (360 * 86400)
+            cursor.execute("DELETE FROM audit_logs WHERE timestamp < ?", (cutoff,))
+            conn.commit()
+        finally:
+            conn.close()
+    except Exception as e:
+        print(f"ERROR: Failed to write audit log: {e}", file=sys.stderr)
+
 # In-memory job store: {job_id: job_dict}
 jobs: dict = {}
 
@@ -99,6 +123,17 @@ def init_db():
             CREATE TABLE IF NOT EXISTS settings (
                 key TEXT PRIMARY KEY,
                 value TEXT
+            )
+        ''')
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS audit_logs (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                timestamp REAL,
+                actor TEXT,
+                action TEXT,
+                target TEXT,
+                details TEXT,
+                ip_address TEXT
             )
         ''')
         conn.commit()
@@ -1045,6 +1080,12 @@ def log_and_notify_run(jid, info, start_time, end_time, status, run_dest):
         size_bytes = get_dir_size(run_dest) if run_dest else 0
     duration = end_time - start_time
     
+    # Audit log
+    is_failed = 'failed' in status.lower() or 'error' in status.lower()
+    details = f"Status: {status}, Size: {size_bytes / (1024**3):.2f} GB, Duration: {fmt_duration(duration)}"
+    action = 'BACKUP_FAILURE' if is_failed else 'BACKUP_SUCCESS'
+    log_audit('system', action, jid, details)
+    
     vm_names = info.get('vm_names')
     if vm_names:
         vm_display = ", ".join(vm_names)
@@ -1268,6 +1309,7 @@ def enforce_retention_policy(info, log_path=None):
                         import shutil
                         shutil.rmtree(path)
                         log_msg(f"Deleted old backup directory: {name}")
+                        log_audit('system', 'RETENTION_PRUNE', vm_name, f"Pruned old successful backup folder '{name}' for VM '{vm_name}' (policy: keep {retention_val} count)")
                     except Exception as e:
                         log_msg(f"ERROR deleting {name}: {e}")
 
@@ -1287,6 +1329,7 @@ def enforce_retention_policy(info, log_path=None):
                     try:
                         shutil.rmtree(path)
                         log_msg(f"Deleted backup older than {retention_val} days: {name}")
+                        log_audit('system', 'RETENTION_PRUNE', vm_name, f"Pruned backup folder '{name}' older than {retention_val} days for VM '{vm_name}'")
                         deleted_count += 1
                     except Exception as e:
                         log_msg(f"ERROR deleting {name}: {e}")
@@ -1367,6 +1410,10 @@ def run_job_thread_impl(jid):
         info['started']  = time.time()
         info['progress'] = {'pct': 0, 'phase': 'starting', 'detail': 'Initializing…'}
         save_jobs_db()
+        
+    vm_names = info.get('vm_names')
+    target_display = ", ".join(vm_names) if vm_names else info.get('vm_name', '—')
+    log_audit('system', 'BACKUP_START', jid, f"Backup run started for job {jid} (label: '{info.get('label')}', target: {target_display})")
     
     def is_cancelled():
         with jobs_db_lock:
@@ -1449,7 +1496,12 @@ def run_job_thread_impl(jid):
                 rep_dest = info.get('replication_dest')
                 if rep_dest and str(rep_dest).strip() and str(rep_dest).strip().lower() != 'none':
                     rep_vm_dest = os.path.join(rep_dest, vm, f"backup-{run_timestamp}")
-                    replicate_backup_folder(vm_dest, rep_vm_dest, log_path=log_path)
+                    log_audit('system', 'REPLICATION_START', jid, f"Started replication for VM {vm} to {rep_vm_dest}")
+                    rep_ok = replicate_backup_folder(vm_dest, rep_vm_dest, log_path=log_path)
+                    if rep_ok:
+                        log_audit('system', 'REPLICATION_SUCCESS', jid, f"Replication completed successfully for VM {vm}")
+                    else:
+                        log_audit('system', 'REPLICATION_FAILURE', jid, f"Replication failed for VM {vm}")
             except Exception as e:
                 is_cancel_err = "cancelled by user" in str(e).lower()
                 if is_cancel_err:
@@ -1547,7 +1599,12 @@ def run_job_thread_impl(jid):
             rep_dest = info.get('replication_dest')
             if rep_dest and str(rep_dest).strip() and str(rep_dest).strip().lower() != 'none':
                 rep_run_dest = os.path.join(rep_dest, info['vm_name'], f"backup-{run_timestamp}")
-                replicate_backup_folder(run_dest, rep_run_dest, log_path=log_path)
+                log_audit('system', 'REPLICATION_START', jid, f"Started replication for VM {info['vm_name']} to {rep_run_dest}")
+                rep_ok = replicate_backup_folder(run_dest, rep_run_dest, log_path=log_path)
+                if rep_ok:
+                    log_audit('system', 'REPLICATION_SUCCESS', jid, f"Replication completed successfully for VM {info['vm_name']}")
+                else:
+                    log_audit('system', 'REPLICATION_FAILURE', jid, f"Replication failed for VM {info['vm_name']}")
         except Exception as e:
             with jobs_db_lock:
                 if "cancelled by user" in str(e).lower():
@@ -1678,6 +1735,7 @@ def login():
         session['user']          = user
         session['password']      = password
         session['no_verify_ssl'] = no_verify_ssl
+        log_audit(user, 'USER_LOGIN', host, f"Logged in to vSphere host: {host}", req=request)
         flash(f'Connected to {host} — {len(vm_list)} VMs found.', 'success')
         return redirect(url_for('vms'))
 
@@ -1686,7 +1744,9 @@ def login():
 
 @app.route('/logout')
 def logout():
+    user = session.get('user', 'unknown')
     session.clear()
+    log_audit(user, 'USER_LOGOUT', '-', "Logged out", req=request)
     flash('Logged out.', 'info')
     return redirect(url_for('login'))
 
@@ -1715,6 +1775,7 @@ def settings_page():
         set_setting('alert_level', request.form.get('alert_level', 'all'))
         set_setting('log_retention_days', request.form.get('log_retention_days', 'never'))
         
+        log_audit(session.get('user', 'unknown'), 'SETTINGS_UPDATE', 'System Settings', 'Updated SMTP, Webhook, and retention settings', req=request)
         flash('Settings saved successfully.', 'success')
         return redirect(url_for('settings_page'))
         
@@ -1745,6 +1806,7 @@ def settings_page():
 @app.route('/settings/test-notification', methods=['POST'])
 @login_required
 def settings_test_notification():
+    log_audit(session.get('user', 'unknown'), 'DIAGNOSTIC_TEST', 'Notification Settings', 'Triggered settings diagnostic connection test', req=request)
     webhook_enabled = 'webhook_enabled' in request.form
     webhook_url = request.form.get('webhook_url', '').strip()
     webhook_type = request.form.get('webhook_type', 'slack_discord')
@@ -1972,6 +2034,13 @@ def create_job():
             use_cbt=use_cbt,
             replication_dest=replication_dest
         )
+        log_audit(
+            session.get('user', 'unknown'),
+            'JOB_CREATE',
+            jid,
+            f"Created backup job (VM: {vm_name}, label: '{label}', schedule: {schedule_type})",
+            req=request
+        )
         n_disks = len(disk_filter) if disk_filter is not None else 'all'
         flash(f'Job created — {n_disks} disk(s) selected.', 'success')
         return redirect(url_for('job_detail', jobid=jid))
@@ -2101,6 +2170,13 @@ def batch_jobs():
             use_cbt=use_cbt,
             replication_dest=replication_dest
         )
+        log_audit(
+            session.get('user', 'unknown'),
+            'JOB_CREATE',
+            jid,
+            f"Created batch backup job for {len(vm_names)} VMs (label: '{label}', strategy: {disk_strategy}, schedule: {schedule_type})",
+            req=request
+        )
 
         strat_label = {'all': 'all disks', 'os': 'OS disk only', 'vmx': 'VMX config only'}.get(disk_strategy, disk_strategy)
         flash(f'Batch backup job created for {len(vm_names)} VMs ({strat_label}).', 'success')
@@ -2119,6 +2195,91 @@ def batch_jobs():
         vm_names=vm_names,
         vms_by_name=vms_by_name,
         current_month=datetime.now().month,
+    )
+
+
+@app.route('/audit-logs')
+@login_required
+def audit_logs_page():
+    page = request.args.get('page', 1, type=int)
+    per_page = 25
+    offset = (page - 1) * per_page
+    
+    q = request.args.get('q', '').strip()
+    actor_type = request.args.get('actor_type', 'all').strip().lower()
+    action_type = request.args.get('action_type', 'all').strip()
+    
+    query = "SELECT timestamp, actor, action, target, details, ip_address FROM audit_logs WHERE 1=1"
+    count_query = "SELECT count(*) FROM audit_logs WHERE 1=1"
+    params = []
+    
+    if q:
+        filter_sql = " AND (actor LIKE ? OR target LIKE ? OR details LIKE ?)"
+        query += filter_sql
+        count_query += filter_sql
+        like_q = f"%{q}%"
+        params.extend([like_q, like_q, like_q])
+        
+    if actor_type == 'user':
+        # Anything that is NOT 'system'
+        query += " AND actor != 'system'"
+        count_query += " AND actor != 'system'"
+    elif actor_type == 'system':
+        query += " AND actor = 'system'"
+        count_query += " AND actor = 'system'"
+        
+    if action_type != 'all':
+        query += " AND action = ?"
+        count_query += " AND action = ?"
+        params.append(action_type)
+        
+    query += " ORDER BY timestamp DESC LIMIT ? OFFSET ?"
+    
+    conn = sqlite3.connect(DB_PATH)
+    logs_list = []
+    total_count = 0
+    try:
+        cursor = conn.cursor()
+        
+        # Get total count
+        cursor.execute(count_query, params)
+        total_count = cursor.fetchone()[0]
+        
+        # Get paginated data
+        query_params = params + [per_page, offset]
+        cursor.execute(query, query_params)
+        rows = cursor.fetchall()
+        for r in rows:
+            logs_list.append({
+                'timestamp_fmt': datetime.fromtimestamp(r[0]).strftime('%Y-%m-%d %H:%M:%S'),
+                'actor': r[1],
+                'action': r[2],
+                'target': r[3] or '—',
+                'details': r[4] or '',
+                'ip_address': r[5] or '—'
+            })
+            
+        # Get all distinct actions for the dropdown filter
+        cursor.execute("SELECT DISTINCT action FROM audit_logs ORDER BY action")
+        actions_list = [row[0] for row in cursor.fetchall()]
+    except Exception as e:
+        print(f"Error fetching audit logs: {e}", file=sys.stderr)
+        actions_list = []
+    finally:
+        conn.close()
+        
+    total_pages = max(1, (total_count + per_page - 1) // per_page)
+    
+    return render_template(
+        'audit_logs.html',
+        logs=logs_list,
+        page=page,
+        total_pages=total_pages,
+        total_count=total_count,
+        q=q,
+        actor_type=actor_type,
+        action_type=action_type,
+        actions_list=actions_list
     )
 
 
@@ -2286,6 +2447,13 @@ def cancel_schedule(jobid):
         info['schedule_id'] = None
         info['status'] = info.get('status', 'finished') if info.get('status') not in ('queued', 'running') else info['status']
         save_jobs_db()
+        log_audit(
+            session.get('user', 'unknown'),
+            'SCHEDULE_CANCEL',
+            jobid,
+            f"Cancelled recurring schedule (old schedule ID: {sched_id})",
+            req=request
+        )
     flash('Recurring schedule cancelled.', 'success')
     return redirect(url_for('job_detail', jobid=jobid))
 
@@ -2310,6 +2478,13 @@ def reactivate_schedule(jobid):
             if info.get('status') not in ('running', 'queued'):
                 info['status'] = 'scheduled'
             save_jobs_db()
+            log_audit(
+                session.get('user', 'unknown'),
+                'SCHEDULE_REACTIVATE',
+                jobid,
+                f"Reactivated recurring schedule (new schedule ID: {sched_id}, type: {info.get('schedule_type')})",
+                req=request
+            )
             flash('Recurring schedule reactivated successfully.', 'success')
         else:
             flash('Failed to reactivate schedule.', 'danger')
@@ -2331,6 +2506,13 @@ def run_job_now(jobid):
         # Mark status as queued atomically to prevent double run race condition
         info['status'] = 'queued'
         save_jobs_db()
+        log_audit(
+            session.get('user', 'unknown'),
+            'BACKUP_TRIGGER',
+            jobid,
+            "Manually triggered backup execution",
+            req=request
+        )
     
     # Start backup execution in a background thread
     t = threading.Thread(target=run_job_thread, args=(jobid,), daemon=True)
@@ -2351,6 +2533,13 @@ def stop_job(jobid):
             info['status'] = 'cancelling'
             info['progress'] = {'pct': info.get('progress', {}).get('pct', 0), 'phase': 'cancelling', 'detail': 'Stopping backup execution…'}
             save_jobs_db()
+            log_audit(
+                session.get('user', 'unknown'),
+                'BACKUP_STOP',
+                jobid,
+                "Requested backup execution stop",
+                req=request
+            )
             flash('Request to stop backup sent.', 'info')
         else:
             flash('Job is not running or queued.', 'warning')
@@ -2377,6 +2566,13 @@ def delete_job(jobid):
         # Remove from jobs dict
         jobs.pop(jobid, None)
         save_jobs_db()
+        log_audit(
+            session.get('user', 'unknown'),
+            'JOB_DELETE',
+            jobid,
+            f"Deleted backup job (label: '{info.get('label')}')",
+            req=request
+        )
     
     # Remove the job directory containing the log file
     import shutil
@@ -2488,6 +2684,13 @@ def edit_job(jobid):
                 info['status'] = 'finished' if info.get('status') == 'scheduled' else info.get('status', 'finished')
 
             save_jobs_db()
+            log_audit(
+                session.get('user', 'unknown'),
+                'JOB_EDIT',
+                jobid,
+                f"Updated job configuration (label: '{label}', schedule: {schedule_type})",
+                req=request
+            )
             flash('Job updated successfully.', 'success')
             return redirect(url_for('job_detail', jobid=jobid))
 
@@ -2536,6 +2739,13 @@ def nfs_mount():
         return redirect(url_for('nfs_manager'))
     try:
         mount_nfs(server, export, mountpoint, nfs_version=nfs_ver, extra_opts=extra_opts)
+        log_audit(
+            session.get('user', 'unknown'),
+            'NFS_MOUNT',
+            mountpoint,
+            f"Successfully mounted NFS export {server}:{export} to {mountpoint}",
+            req=request
+        )
         flash(f'Mounted {server}:{export} → {mountpoint} successfully.', 'success')
     except Exception as e:
         flash(f'Mount failed: {e}', 'danger')
@@ -2551,6 +2761,13 @@ def nfs_umount():
         return redirect(url_for('nfs_manager'))
     try:
         umount_nfs(mountpoint)
+        log_audit(
+            session.get('user', 'unknown'),
+            'NFS_UMOUNT',
+            mountpoint,
+            f"Successfully unmounted NFS mount point at {mountpoint}",
+            req=request
+        )
         flash(f'Unmounted {mountpoint} successfully.', 'success')
     except Exception as e:
         flash(f'Unmount failed: {e}', 'danger')

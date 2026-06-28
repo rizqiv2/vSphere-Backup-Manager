@@ -1,0 +1,240 @@
+{% extends "base.html" %}
+{% set active_page = 'audit-logs' %}
+{% block title %}Audit Logs — vSphere Backup Manager{% endblock %}
+
+{% block head %}
+<style>
+  .history-card {
+    background: var(--bg-card);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    padding: 24px;
+    box-shadow: var(--shadow);
+    backdrop-filter: blur(8px);
+    margin-bottom: 32px;
+  }
+  .search-input-wrap {
+    position: relative;
+  }
+  .search-input {
+    width: 100%;
+    padding: 8px 12px 8px 36px;
+    font-size: 13.5px;
+  }
+  .search-icon {
+    position: absolute;
+    left: 12px;
+    top: 50%;
+    transform: translateY(-50%);
+    color: var(--text-muted);
+    pointer-events: none;
+    font-size: 14px;
+  }
+
+  .runs-table-wrap {
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+    overflow: hidden;
+  }
+  .runs-table-wrap table {
+    width: 100%;
+    border-collapse: collapse;
+  }
+  .runs-table-wrap th, .runs-table-wrap td {
+    padding: 12px 16px;
+    text-align: left;
+  }
+  .runs-table-wrap th {
+    background: rgba(255, 255, 255, 0.02);
+    border-bottom: 1px solid var(--border);
+    font-size: 11.5px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    color: var(--text-muted);
+  }
+  .runs-table-wrap td {
+    border-bottom: 1px solid var(--border);
+    font-size: 13px;
+  }
+  .runs-table-wrap tr:last-child td {
+    border-bottom: none;
+  }
+  .runs-table-wrap tr:hover td {
+    background: rgba(255, 255, 255, 0.01);
+  }
+
+  .text-right { text-align: right !important; }
+  
+  .badge-action {
+    display: inline-block;
+    padding: 2px 8px;
+    border-radius: 4px;
+    font-size: 10.5px;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.03em;
+  }
+  .action-user {
+    background: rgba(99, 102, 241, 0.15);
+    color: #818cf8;
+    border: 1px solid rgba(99, 102, 241, 0.3);
+  }
+  .action-system {
+    background: rgba(6, 182, 212, 0.15);
+    color: #22d3ee;
+    border: 1px solid rgba(6, 182, 212, 0.3);
+  }
+  .action-backup-success {
+    background: rgba(16, 185, 129, 0.15);
+    color: #34d399;
+    border: 1px solid rgba(16, 185, 129, 0.3);
+  }
+  .action-backup-fail {
+    background: rgba(239, 68, 68, 0.15);
+    color: #f87171;
+    border: 1px solid rgba(239, 68, 68, 0.3);
+  }
+  
+  .clear-filter-btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    padding: 0 16px;
+    border: 1px solid rgba(239, 68, 68, 0.4);
+    color: #f87171;
+    border-radius: var(--radius-sm);
+    font-size: 13px;
+    font-weight: 600;
+    text-decoration: none;
+    transition: background-color 0.2s, border-color 0.2s;
+  }
+  .clear-filter-btn:hover {
+    background: rgba(239, 68, 68, 0.1);
+    border-color: #ef4444;
+  }
+</style>
+{% endblock %}
+
+{% block content %}
+<div class="topbar">
+  <div>
+    <div class="topbar-title">Audit Logs</div>
+    <div class="topbar-subtitle">Historical records of all user management actions and system-level events (Auto-pruned after 360 days)</div>
+  </div>
+</div>
+
+<div class="content">
+  <div class="history-card">
+    <!-- Filters Toolbar -->
+    <form method="get" action="/audit-logs" style="margin-bottom: 20px;">
+      <div style="display: flex; gap: 12px; flex-wrap: wrap; align-items: center;">
+        <div class="search-input-wrap" style="flex: 1; min-width: 240px;">
+          <span class="search-icon">🔍</span>
+          <input type="text" name="q" value="{{ q or '' }}" class="form-control search-input" placeholder="Search actor, target, details..." />
+        </div>
+        
+        <div style="display: flex; gap: 8px; align-items: center;">
+          <label style="font-size: 11px; color: var(--text-muted); font-weight: 600; text-transform: uppercase; letter-spacing: 0.05em;">Type:</label>
+          <select name="actor_type" class="form-control" style="font-size: 13px; padding: 6px 12px; height: 36px; min-width: 130px; width: auto;" onchange="this.form.submit()">
+            <option value="all" {% if actor_type == 'all' %}selected{% endif %}>All Events</option>
+            <option value="user" {% if actor_type == 'user' %}selected{% endif %}>User Actions</option>
+            <option value="system" {% if actor_type == 'system' %}selected{% endif %}>System Events</option>
+          </select>
+        </div>
+        
+        <div style="display: flex; gap: 8px; align-items: center;">
+          <label style="font-size: 11px; color: var(--text-muted); font-weight: 600; text-transform: uppercase; letter-spacing: 0.05em;">Action:</label>
+          <select name="action_type" class="form-control" style="font-size: 13px; padding: 6px 12px; height: 36px; min-width: 165px; width: auto;" onchange="this.form.submit()">
+            <option value="all" {% if action_type == 'all' %}selected{% endif %}>All Actions</option>
+            {% for act in actions_list %}
+              <option value="{{ act }}" {% if action_type == act %}selected{% endif %}>{{ act }}</option>
+            {% endfor %}
+          </select>
+        </div>
+        
+        <button type="submit" class="btn btn-secondary" style="height: 36px;">Apply</button>
+        {% if q or actor_type != 'all' or action_type != 'all' %}
+          <a href="/audit-logs" class="clear-filter-btn" style="height: 36px;">Clear Filters</a>
+        {% endif %}
+      </div>
+    </form>
+
+    <!-- Table -->
+    <div class="runs-table-wrap">
+      <table>
+        <thead>
+          <tr>
+            <th style="width: 160px;">Timestamp</th>
+            <th style="width: 180px;">Actor</th>
+            <th style="width: 180px;">Action</th>
+            <th style="width: 140px;">Target</th>
+            <th>Details</th>
+            <th style="width: 130px;" class="text-right">IP Address</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% if logs %}
+            {% for log in logs %}
+            <tr>
+              <td class="mono" style="font-size: 12px; color: var(--text-secondary);">{{ log.timestamp_fmt }}</td>
+              <td>
+                {% if log.actor == 'system' %}
+                  <span style="font-weight: 600; color: #22d3ee;">🤖 system</span>
+                {% else %}
+                  <span style="font-weight: 500; color: var(--text-primary);">👤 {{ log.actor }}</span>
+                {% endif %}
+              </td>
+              <td>
+                {% if log.action in ('USER_LOGIN', 'USER_LOGOUT') %}
+                  <span class="badge-action action-user">{{ log.action }}</span>
+                {% elif 'SUCCESS' in log.action or 'OK' in log.action %}
+                  <span class="badge-action action-backup-success">{{ log.action }}</span>
+                {% elif 'FAIL' in log.action or 'FAILURE' in log.action or 'ERROR' in log.action %}
+                  <span class="badge-action action-backup-fail">{{ log.action }}</span>
+                {% else %}
+                  <span class="badge-action action-system">{{ log.action }}</span>
+                {% endif %}
+              </td>
+              <td class="mono" style="font-size: 12px; color: var(--text-muted);">{{ log.target }}</td>
+              <td style="color: var(--text-secondary); word-break: break-word;">{{ log.details }}</td>
+              <td class="text-right mono" style="font-size: 12px; color: var(--text-muted);">{{ log.ip_address }}</td>
+            </tr>
+            {% endfor %}
+          {% else %}
+            <tr>
+              <td colspan="6" style="text-align: center; padding: 48px; color: var(--text-muted);">
+                No matching audit logs found. User actions and system events will appear here chronologically.
+              </td>
+            </tr>
+          {% endif %}
+        </tbody>
+      </table>
+    </div>
+
+    <!-- Pagination Controls -->
+    {% if total_pages > 1 %}
+    <div class="pagination-wrap" style="display: flex; justify-content: space-between; align-items: center; margin-top: 20px;">
+      <div style="font-size: 13px; color: var(--text-muted);">
+        Showing <strong>{{ logs|length }}</strong> of <strong>{{ total_count }}</strong> log entries
+      </div>
+      <div style="display: flex; gap: 8px; align-items: center;">
+        {% if page > 1 %}
+          <a href="{{ url_for('audit_logs_page', page=page-1, q=q, actor_type=actor_type, action_type=action_type) }}" class="btn btn-secondary btn-sm" style="padding: 6px 12px; display: inline-flex; align-items: center; justify-content: center; height: 32px; text-decoration: none;">← Previous</a>
+        {% else %}
+          <button class="btn btn-secondary btn-sm" disabled style="padding: 6px 12px; display: inline-flex; align-items: center; justify-content: center; height: 32px; opacity: 0.5; cursor: not-allowed;">← Previous</button>
+        {% endif %}
+        
+        <span style="font-size: 13px; color: var(--text-secondary); margin: 0 4px;">Page <strong>{{ page }}</strong> of <strong>{{ total_pages }}</strong></span>
+        
+        {% if page < total_pages %}
+          <a href="{{ url_for('audit_logs_page', page=page+1, q=q, actor_type=actor_type, action_type=action_type) }}" class="btn btn-secondary btn-sm" style="padding: 6px 12px; display: inline-flex; align-items: center; justify-content: center; height: 32px; text-decoration: none;">Next →</a>
+        {% else %}
+          <button class="btn btn-secondary btn-sm" disabled style="padding: 6px 12px; display: inline-flex; align-items: center; justify-content: center; height: 32px; opacity: 0.5; cursor: not-allowed;">Next →</button>
+        {% endif %}
+      </div>
+    </div>
+    {% endif %}
+  </div>
+</div>
+{% endblock %}
